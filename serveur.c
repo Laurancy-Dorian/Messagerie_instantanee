@@ -24,6 +24,10 @@ int socketServeur;
 int socketClients[NB_CLIENTS];
 
 struct sockaddr_in adServ;
+struct sockaddr_in adClient[NB_CLIENTS]; 
+
+socklen_t lgA = sizeof(struct sockaddr_in);	
+
 
 /* Ferme les sockets et quitte le programme */
 void fermer() {
@@ -81,6 +85,18 @@ int initialisation (int port) {
 
 	return 0;
 }
+
+/*
+*	Attend qu’un client se connecte.
+*	return : Lorsqu’un client est connecte 
+*
+*/
+int attenteConnexion(int* socClient, struct sockaddr* donneesClient) {
+	/* Accepte la connexion avec un client */
+	return accept(*socClient, (struct sockaddr *) donneesClient, &lgA);
+}
+
+
 
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
