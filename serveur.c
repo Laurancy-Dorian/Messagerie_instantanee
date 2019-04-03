@@ -14,27 +14,72 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
+#include <signal.h>
+
+/* Definition de constantes */
+#define NB_CLIENTS 2
 
 /* Socket (globaux pour la fonction "fermer") */
 int socketServeur; 
-int socketClient;
+int socketClients[NB_CLIENTS];
+
+struct sockaddr_in adServ;
 
 /* Ferme les sockets et quitte le programme */
 void fermer() {
-	int res = close (socketClient);
-	if (res == 0) {
-		printf("\nFermeture du socket client\n");
-	} else {
-		perror("\nErreur fermeture du socket client\n");
+	int i;
+
+	/* Ferme tous les sockets clients */
+	for (i = 0; i < NB_CLIENTS; i++) {
+		int res = close (socketClients[i]);
+		if (res == 0) {
+			printf("\nFermeture du socket client numero %d\n", i);
+		} else {
+			printf("\nErreur fermeture du socket client numero %d\n", i);
+			perror(NULL);
+		}
 	}
 
-	int res2 = close(soc);
-	if (res2 == 0) {
+	/* Ferme le socket serveur */
+	int res = close(socketServeur);
+	if (res == 0) {
 		printf("\nFermeture du socket serveur\n");
 	} else {
 		perror("\nErreur fermeture  du socket serveur\n");
 	}
 	exit(0);
+}
+
+/*
+*	Initialise le serveur : prepare le socket, bind et listen
+*	param : int port 	Le port sur lequel le socket doit ecouter
+*	Return :
+*		-1  :  Erreur lors du nommage du socket
+*		-2  :  Erreur lors de l'ecoute
+*		0 si l'initialisation s'est bien passee
+*/
+int initialisation (int port) {
+	/* Creation de la socket IPV4 / TCP*/
+	socketServeur = socket(PF_INET, SOCK_STREAM, 0);
+
+	/* Description des donnees */
+	adServ.sin_family = AF_INET;	/* IPV4 */
+	adServ.sin_addr.s_addr = INADDR_ANY;	/* "N'importe quelle IP" */
+	adServ.sin_port = htons(port);	/* PORT */
+
+	/* Nommage du socket */
+	int res = bind (socketServeur, (struct sockaddr*) &adServ, sizeof(adServ));
+	if (res < 0) {
+		return -1;
+	}
+
+	/* Ecoute jusqu'a 10 clients*/
+	res = listen (socketServeur, 10);
+	if (res < 0) {
+		return -2;
+	}
+
+	return 0;
 }
 
 int main (int argc, char *argv[]) {
