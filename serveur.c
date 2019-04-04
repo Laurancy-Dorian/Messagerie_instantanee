@@ -17,6 +17,7 @@
 #include <signal.h>
 
 /* Definition de constantes */
+#define PORT 2500
 #define NB_CLIENTS 2
 #define TAILLE_BUFFER 2048
 
@@ -38,15 +39,20 @@ socklen_t lgA = sizeof(struct sockaddr_in);
 * Ferme les sockets et quitte le programme
 */
 void fermer() {
+	printf("\n\n* -- FERMETURE DU SERVEUR -- *\n");
+
 	int i;
 
 	/* Ferme tous les sockets clients */
 	for (i = 0; i < NB_CLIENTS; i++) {
-		int res = close (socketClients[i]);
+		int res = 0;
+		if (socketClients[i] > 0) {
+			res = close (socketClients[i]);
+		}
 		if (res == 0) {
-			printf("\nFermeture du socket client numero %d\n", i);
+			printf("Fermeture du socket client numero %d\n", i);
 		} else {
-			printf("\nErreur fermeture du socket client numero %d\n", i);
+			printf("Erreur fermeture du socket client numero %d\n", i);
 			perror(NULL);
 		}
 	}
@@ -54,10 +60,12 @@ void fermer() {
 	/* Ferme le socket serveur */
 	int res = close(socketServeur);
 	if (res == 0) {
-		printf("\nFermeture du socket serveur\n");
+		printf("Fermeture du socket serveur\n");
 	} else {
-		perror("\nErreur fermeture  du socket serveur\n");
+		perror("Erreur fermeture  du socket serveur\n");
 	}
+
+	printf("* -- FIN DU PROGRAMME -- *\n");
 
 	exit(0);
 }
@@ -85,8 +93,8 @@ int initialisation (int port) {
 		return -1;
 	}
 
-	/* Ecoute jusqu'a 10 clients*/
-	res = listen (socketServeur, 10);
+	/* Ecoute jusqu'a NB_CLIENTS clients*/
+	res = listen (socketServeur, NB_CLIENTS);
 	if (res < 0) {
 		return -2;
 	}
@@ -103,7 +111,7 @@ int initialisation (int port) {
 *	return : -1 si echec, 0 sinon
 *
 */
-int attenteConnexion(int* socClient, struct sockaddr* donneesClient) {
+int attenteConnexion(int* socClient, struct sockaddr_in *donneesClient) {
 	/* Accepte la connexion avec un client */
 	int retour = accept(socketServeur, (struct sockaddr *) donneesClient, &lgA);
 
@@ -268,9 +276,105 @@ int conversation (int socClient1, int socClient2) {
 
 
 /* TODO : Prendre en compte la deconnexion du client pendant l'attente du 2eme client */
+
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
+
+	/* --- INITIALISATION DU SERVEUR --- */
+
+	/* Reccupere le port passe en argument, si aucun port n'est renseigne, le port est la constante PORT */
+	int port;
+	if (argc > 1) {
+		port = atoi(argv[1]);
+	} else {
+		port = PORT;
+	}
+
+	printf("* -- INITIALISATION DU SERVEUR -- *\n");
+	int resInit = initialisation(port);
+
+	if (resInit == -1) {
+		perror ("Erreur lors du nommage du Socket Serveur\n");
+		fermer();
+	} else if (resInit == -2) {
+		perror ("Erreur lors de l'ecoute du Socket Serveur\n");
+		fermer();
+	} else {
+		printf("* -- SERVEUR INITIALISE -- *\n");
+	}
+
+	/* Initialise les sockets des clients à -1 (pour verification plus tard) */
+	for (int c = 0; c < NB_CLIENTS; c++) {
+		socketClients[c] = -1;
+	}
+
+	/* --- BOUCLE PRINCIPALE --- */
+	while (1) {
+		int i = 0;
+		int dernierConnecte = 0;
+
+		for (i = 0; i<NB_CLIENTS; i++) {
+			if (socketClients[i] < 0) {
+				printf ("Attente de connexion d'un client\n");
+
+				int resConnexion = attenteConnexion(&socketClients[i], &adClient[i]);
+				dernierConnecte = i;
+
+				if (resConnexion == 0) {
+					/* Reccupere l'IP du client et l'affiche*/
+					char ipclient[50];
+					inet_ntop(AF_INET, &(adClient[i].sin_addr), ipclient, INET_ADDRSTRLEN);	
+
+					printf ("Client %s connecte !\n", ipclient);
+				} else {
+					perror ("Erreur lors de la connexion au client\n");
+					fermer();
+				}
+
+			}
+		}
+
+		if (socketClients[0] < 0 && socketClients[1] < 0) {
+			printf("* -- DEBUT DE LA CONVERSATION -- *\n");
+
+			int resConv = conversation(socketClients[dernierConnecte], socketClients[1-dernierConnecte]);
+			
+			printf("* -- FIN DE LA CONVERSATION -- *\n");
+
+			if (resConv == 0) {
+				/* Reccupere l'IP du client et l'affiche*/
+				char ipclient[50];
+				inet_ntop(AF_INET, &(adClient[dernierConnecte].sin_addr), ipclient, INET_ADDRSTRLEN);	
+				printf ("Le client %s s'est deconnecte\n", ipclient);
+
+				/* Deconnecte et Reinitialise les donnees pour cette case */
+				shutdown (socketClients[dernierConnecte], 2);
+				socketClients[dernierConnecte] = -1;
+
+			} else {
+				/* Reccupere l'IP du client et l'affiche*/
+				char ipclient[50];
+				inet_ntop(AF_INET, &(adClient[1 - dernierConnecte].sin_addr), ipclient, INET_ADDRSTRLEN);	
+
+				/* Deconnecte et Reinitialise les donnees pour cette case */
+				shutdown (socketClients[1 - dernierConnecte], 2);
+				socketClients[1 - dernierConnecte] = -1;	
+			}
+		} else {
+			/* S'il n'y a pas deux clients de connectes lors de cette phase, on deconnecte tous les clients */
+			printf ("Erreur lors de la connexion des deux pairs\n");
+
+			for (int c = 0; c < NB_CLIENTS; c++) {
+				/* Ferme la connexion avec le client */
+				shutdown (socketClients[c], 2);
+
+				socketClients[c] = -1;				
+
+			}
+		}
+
+	}
 
 	return 0;
 }
