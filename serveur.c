@@ -294,7 +294,6 @@ void ipServeur(char* ip) {
 		exit(1);
 	}
 
-<<<<<<< HEAD
 	/* Read the output a line at a time - output it. */
 	fgets(ip, 50, fp);
 	char *pos = strchr(ip, '\n');
@@ -304,9 +303,6 @@ void ipServeur(char* ip) {
 	pclose(fp);
 	
 }
-
-=======
->>>>>>> d93a4f5a48e833b38ae2f7ab585544c8964084cb
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
