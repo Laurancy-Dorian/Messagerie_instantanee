@@ -15,6 +15,9 @@
 #include <unistd.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
 
 /* Definition de constantes */
 #define PORT 2500
@@ -274,8 +277,32 @@ int conversation (int socClient1, int socClient2) {
 	return -1;
 }
 
+/* 
+*	Stocke l'IP du serveur dans la variable passee en parametre
+*	prereq : ip possede au moins 50 caracteres alloues
+*	
+*	Reference :
+* 	https://stackoverflow.com/questions/646241/c-run-a-system-command-and-get-output
+*/
+void ipServeur(char* ip) {
+	FILE *fp;
 
-/* TODO : Prendre en compte la deconnexion du client pendant l'attente du 2eme client */
+	/* Open the command for reading. */
+	fp = popen("hostname --all-ip-addresses", "r");
+	if (fp == NULL) {
+		printf("Failed to run command\n" );
+		exit(1);
+	}
+
+	/* Read the output a line at a time - output it. */
+	fgets(ip, 50, fp);
+	char *pos = strchr(ip, '\n');
+	*pos = '\0';
+
+	/* close */
+	pclose(fp);
+	
+}
 
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
@@ -302,6 +329,11 @@ int main (int argc, char *argv[]) {
 		fermer();
 	} else {
 		printf("* -- SERVEUR INITIALISE -- *\n");
+
+		/* Reccupere l'IP et le port du serveur et les affiche*/
+		char ipServ[50];
+		ipServeur(ipServ);
+		printf("IP : %s\nPort : %d\n", ipServ, port);
 	}
 
 	/* Initialise les sockets des clients à -1 (pour verification plus tard) */
