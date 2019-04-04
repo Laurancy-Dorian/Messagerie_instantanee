@@ -23,13 +23,16 @@
 int socketServeur; 
 int socketClients[NB_CLIENTS];
 
+/* Structures contenant les donnees du serveur et des clients */
 struct sockaddr_in adServ;
 struct sockaddr_in adClient[NB_CLIENTS]; 
 
 socklen_t lgA = sizeof(struct sockaddr_in);	
 
 
-/* Ferme les sockets et quitte le programme */
+/*
+* Ferme les sockets et quitte le programme
+*/
 void fermer() {
 	int i;
 
@@ -88,12 +91,23 @@ int initialisation (int port) {
 
 /*
 *	Attend qu’un client se connecte.
-*	return : Lorsqu’un client est connecte 
+*	Lorsqu'un client s'est connecte, ses donnees sont stockees dans le 2eme parametre
+*	Et son socket dans le 1er parametre
+*	param : int*		socClient 		La variable ou sera stockee le socket
+*			sockaddr*	donneesClient	La variable ou seront stockees les donnees du client
+*	return : -1 si echec, 0 sinon
 *
 */
 int attenteConnexion(int* socClient, struct sockaddr* donneesClient) {
 	/* Accepte la connexion avec un client */
-	return accept(*socClient, (struct sockaddr *) donneesClient, &lgA);
+	int retour = accept(socketServeur, (struct sockaddr *) donneesClient, &lgA);
+
+	if (retour > 0) {
+		*socClient = retour;
+		return 0;
+	} else {
+		return -1;
+	}
 }
 
 
