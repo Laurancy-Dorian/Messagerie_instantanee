@@ -275,8 +275,6 @@ int conversation (int socClient1, int socClient2) {
 }
 
 
-/* TODO : Prendre en compte la deconnexion du client pendant l'attente du 2eme client */
-
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
