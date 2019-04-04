@@ -19,7 +19,10 @@
 /* Definition de constantes */
 #define NB_CLIENTS 2
 
-/* Socket (globaux pour la fonction "fermer") */
+/* 
+*	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
+* 	"fermer" puisse y acceder (car elle est declenchee par un CTRL + C) 
+*/
 int socketServeur; 
 int socketClients[NB_CLIENTS];
 
@@ -54,6 +57,7 @@ void fermer() {
 	} else {
 		perror("\nErreur fermeture  du socket serveur\n");
 	}
+
 	exit(0);
 }
 
@@ -111,7 +115,68 @@ int attenteConnexion(int* socClient, struct sockaddr* donneesClient) {
 }
 
 
+/*
+*	Demande a l'utilisateur d'ecrire un message et l'envoie
+*	param : 	int 	socClient 	Le socket du client ou envoyer les donnees
+*	return : 	0 en cas de reussite, -1 sinon
+*/
+int envoi (int socClient) {
 
+	return 0;
+}
+
+/*
+*	Attend une reponse du client et la stocke dans le second parametre
+*	param : 	int 	socClient 	Le socket du client qui envoie le message
+*				char*	msg 		Le pointeur de la chaine de caracteres ou stocker le message
+*				int 	taille		Le nombre d'octets a lire
+*
+*	return : 	-1 si echec
+*				0 si le client s'est deconnecte normalement
+*				Le nombre d'octets lus sinon
+*/
+int reception (int socClient, char* msg, int taille) {
+
+	return 0;
+}
+
+
+/*
+*	Attribue l'ordre des clients en envoyant "NUM1" au premier et "NUM2" au deuxieme
+*	
+*	param : 	int 	socClient1 	Le socket du client qui parlera en 1er
+*				int 	socClient2 	Le socket du client qui parlera en 2eme
+*
+*	return :	0 si ok, -1 si ko
+*/
+int attribuerOrdre(int socClient1, int socClient2) {
+
+	return 0;
+}
+
+/*
+*	Effectue la transition des message entre les deux clients
+*	Envoie tout d'abord au client leur ordre :
+*		- "NUM1" au client qui parlera en premier
+*		- "NUM2" au client qui parlera en deuxieme
+*	Transmet ensuite les messages d'un client a un autre
+*	Si un client se deconnecte ou envoie "FIN", envoie "FIN" a l'autre client
+*
+*	param : 	int 	socClient1 	Le socket du client qui parlera en 1er
+*				int 	socClient2 	Le socket du client qui parlera en 2eme
+*
+*	return : 	0 si le premier client s'est deconnecte
+*				1 si le deuxieme client s'est deconnecte
+*				-1 si erreur
+*
+*/
+int conversation (int socClient1, int socClient2) {
+
+	return 0;
+}
+
+
+/* TODO : Prendre en compte la deconnexion du client pendant l'attente du 2eme client */
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
