@@ -18,6 +18,7 @@
 
 /* Definition de constantes */
 #define NB_CLIENTS 2
+#define TAILLE_BUFFER 2048
 
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
@@ -116,28 +117,30 @@ int attenteConnexion(int* socClient, struct sockaddr* donneesClient) {
 
 
 /*
-*	Demande a l'utilisateur d'ecrire un message et l'envoie
+*	Envoie le message msg au client dont le socket est renseigne en parametre
 *	param : 	int 	socClient 	Le socket du client ou envoyer les donnees
-*	return : 	0 en cas de reussite, -1 sinon
+*				char*	msg 		La chaine a envoyer
+*	return : 	le nombre d'octets envoyes en cas de reussite, -1 sinon
 */
-int envoi (int socClient) {
-
-	return 0;
+int envoi (int socClient, char* msg) {
+	return (int) send(socClient, msg, strlen(msg)+1, 0);
 }
 
 /*
 *	Attend une reponse du client et la stocke dans le second parametre
 *	param : 	int 	socClient 	Le socket du client qui envoie le message
 *				char*	msg 		Le pointeur de la chaine de caracteres ou stocker le message
-*				int 	taille		Le nombre d'octets a lire
+*				int 	taille		Le nombre d'octets max a lire, si taille == 0, la valeur par defaut est TAILLE_BUFFER
 *
 *	return : 	-1 si echec
 *				0 si le client s'est deconnecte normalement
 *				Le nombre d'octets lus sinon
 */
 int reception (int socClient, char* msg, int taille) {
-
-	return 0;
+	if (taille == 0) {
+		taille = TAILLE_BUFFER;
+	}
+	return (int) recv (socClient, msg, taille, 0);
 }
 
 
@@ -150,8 +153,62 @@ int reception (int socClient, char* msg, int taille) {
 *	return :	0 si ok, -1 si ko
 */
 int attribuerOrdre(int socClient1, int socClient2) {
+	int res1 = envoi(socClient1, "NUM1");
+	int res2 = envoi(socClient2, "NUM2");
 
-	return 0;
+	if ((res1 > 0) && (res2 > 0)) {
+		return 0;
+	} else {
+		return -1;
+	}
+}
+
+/*
+*	Transmet le message du client envoyeur au client receveur
+*	Si l'un des clients envoie "FIN" ou se deconnecte, Envoie "FIN" a l'autre client
+*	param : int 	socEnvoyeur		Le descripteur du socket du client envoyeur
+*			int 	socReceveur		Le descripteur du socket du client receveur
+*	return : 
+*			 -1 si erreur lors de la reception du message du client envoyeur
+*			 -2 si erreur lors de l'envoi au client receveur
+*			 -3 si les deux client se sont deconnectes durant cet echange
+			 Si un client se deconnecte ou envoie "FIN", renvoie son descripteur de socket
+*			 0 sinon
+*/
+int envoi_reception (int socEnvoyeur, int socReceveur) {
+	/* Initialisation du buffer */
+	char str[TAILLE_BUFFER];
+	int res;
+	int retour = 0;
+
+	/* ---- RECEPTION ---- */
+	/* Attend le message du client envoyeur */
+	res = reception (socEnvoyeur, str, 0);
+
+	/* Erreur lors de la reception */
+	if (res < 0) {
+		return -1;
+	} else if (res == 0 || strncmp ("FIN", str, 3)) { /* Le client s'est deconnecte */
+		retour = socEnvoyeur;
+	}
+
+
+	/* ---- ENVOI ---- */
+	/* Envoie le message au receveur */
+	res = envoi (socReceveur, str);
+
+	/* Erreur lors de l'envoi */
+	if (res < 0) {
+		return -2;
+	} else if (res == 0 || strncmp ("FIN", str, 3)) { /* Le client s'est deconnecte */
+		if (retour == 0) {	/* L'autre client n'est pas deconnecte */
+			envoi (socEnvoyeur, "FIN");
+		} else {
+			retour = -3;
+		}
+	}
+
+	return retour;
 }
 
 /*
@@ -171,8 +228,42 @@ int attribuerOrdre(int socClient1, int socClient2) {
 *
 */
 int conversation (int socClient1, int socClient2) {
+	int res = 0;
 
-	return 0;
+	/* Attribue ordre */
+	res = attribuerOrdre(socClient1, socClient2);
+	if (res < 0) {
+		return -1;
+	}
+
+	int envoyeur = socClient1;
+	int receveur = socClient2;
+
+	while(res == 0) {
+
+		/* Envoi du client 1 au client 2 */
+		res = envoi_reception(envoyeur, receveur);
+
+		/* Personne ne s'est deco ou n'a envoye "FIN" */
+		if (res == 0) {
+			/* L'envoyeur devient receveur et le receveur devient envoyeur */
+			int tmp = envoyeur;
+			envoyeur = receveur;
+			receveur = tmp;
+
+		/* Un des deux clients s'est deconnecte */
+		} else if (res > 0) {
+			if (res == socClient1) {
+				return 0;
+			} else if (res == socClient2) {
+				return 1;
+			}
+		/* Il y a eu une erreur lors de l'echange, on retourne le message d'erreur */
+		} else {
+			return -1;
+		}
+	}
+	return -1;
 }
 
 
