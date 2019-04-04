@@ -366,7 +366,7 @@ int main (int argc, char *argv[]) {
 			}
 		}
 
-		if (socketClients[0] < 0 && socketClients[1] < 0) {
+		if (socketClients[0] > 0 && socketClients[1] > 0) {
 			printf("* -- DEBUT DE LA CONVERSATION -- *\n");
 
 			int resConv = conversation(socketClients[dernierConnecte], socketClients[1-dernierConnecte]);
