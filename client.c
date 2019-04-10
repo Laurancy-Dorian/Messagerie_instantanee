@@ -174,6 +174,18 @@ int conversation(int ordre) {
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
-
+	int res = connexion("162.38.111.15",2500);
+	if (res < 0) {
+		erreur("Erreur de connexion au serveur");
+	}
+	else {
+		printf("Connexion au serveur réussie");
+	}
+	int retour = 1;
+	while (retour > 0) {
+		printf("Attente du serveur");
+		int ordre = attente();
+		retour = conversation(ordre);
+	}
 	return 0;
 }
