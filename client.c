@@ -16,9 +16,10 @@
 #include <string.h>
 #include <signal.h>
 
-int socketClient; /* Socket (global pour la fonction "fermer")*/
+int socketClient; /* Socket (global pour la fonction "fermer" */
 struct sockaddr_in adServ;
 
+/*Connecte le client au serveur, retourne 0 si ok, -1 sinon */
 int connexion(char *ip, int port) {
 	/* -- Donnee preliminaire : Taille de la socket -- */
 	socklen_t lgA = sizeof(struct sockaddr_in);
@@ -46,9 +47,9 @@ int connexion(char *ip, int port) {
 
 }
 
+/*Début */
+/*Attente du message du serveur pour l'ordre */
 int attente() {
-	/*Début */
-	/*Attente du message du serv eur pour l'ordre */
 	char str[10];
 	ssize_t reception = recv (socketClient, str, 256, 0);
 
@@ -79,10 +80,100 @@ void fermer() {
 	exit(0);
 }
 
+/* Affiche une erreur et quitte le programme */
+void erreur(char *erreur) {
+	perror(erreur);
+	fermer();
+}
+
+/* Envoi du message et Message de confirmation de l'envoi */
+int envoi(char *msg, int taillemsg) {
+	ssize_t envoi;
+	printf("Entrez un message :\n");
+	fgets(msg, taillemsg, stdin);
+	char *pos = strchr(msg, '\n');
+	*pos = '\0';
+
+	envoi = send(socketClient, msg, strlen(msg)+1, 0);
+
+	if (envoi < 0) {
+		return -1;
+	} else {
+		return 0;
+	}
+}
+
+/* Réception du message */
+int reception(char *str,int taillestr) {
+	ssize_t reception = recv (socketClient, str, taillestr, 0);
+	if (reception < 0) {
+		return -1;
+	} else {
+		return 0;
+	}
+}
+
+int conversation(int ordre) {
+	char msg[256];
+	int res;
+	while(1){
+		if (ordre == 0){
+			res = envoi(msg, 256);
+			if (res == 0) {
+				if (strncmp("FIN", msg, 3)){
+					return 0;
+				}
+				else{
+					printf("Message envoyé \n");
+				}
+			}
+			else {
+				return 0;
+			}
+			res = reception(msg, 256);
+			if (res == 0){
+				if (strncmp("FIN", msg, 3)) {
+					return 1;
+				}
+				else{
+					printf("Message reçu : %s\n", msg);
+				}
+			}
+			else{
+				return 1;
+			}
+		} else {
+			res = reception(msg, 256);
+			if (res == 0){
+				if (strncmp("FIN", msg, 3)) {
+					return 1;
+				}
+				else{
+					printf("Message reçu : %s\n", msg);
+				}
+			}
+			else{
+				return 1;
+			}
+			res = envoi(msg, 256);
+			if (res == 0) {
+				if (strncmp("FIN", msg, 3)){
+					return 0;
+				}
+				else{
+					printf("Message envoyé \n");
+				}
+			}
+			else {
+				return 0;
+			}
+		}
+	}
+}
+
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
 
 	return 0;
 }
-
