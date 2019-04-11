@@ -16,6 +16,10 @@
 #include <string.h>
 #include <signal.h>
 
+#define PORT 2500
+
+char* IP = "127.0.0.1";
+
 int socketClient; /* Socket (global pour la fonction "fermer" */
 struct sockaddr_in adServ;
 
@@ -51,12 +55,13 @@ int connexion(char *ip, int port) {
 /*Attente du message du serveur pour l'ordre */
 int attente() {
 	char str[10];
+	/* GERER CAS 0 */
 	ssize_t reception = recv (socketClient, str, 256, 0);
-
+	printf("reception %d\n", (int) reception);
 	if (reception < 0) {
+		printf("PAS DE REC \n");
 		return -1;
-	}
-	else if (strcmp(str, "NUM1") == 0) {
+	}else if (strcmp(str, "NUM1") == 0) {
 		return 0;
 	}
 	else if (strcmp(str, "NUM2") == 0) {
@@ -115,12 +120,12 @@ int reception(char *str,int taillestr) {
 
 int conversation(int ordre) {
 	char msg[256];
-	int res;
+	int res = 0;
 	while(1){
 		if (ordre == 0){
 			res = envoi(msg, 256);
 			if (res == 0) {
-				if (strncmp("FIN", msg, 3)){
+				if (strncmp("FIN", msg, 3) == 0){
 					return 0;
 				}
 				else{
@@ -130,9 +135,10 @@ int conversation(int ordre) {
 			else {
 				return 0;
 			}
+			res = 0;
 			res = reception(msg, 256);
 			if (res == 0){
-				if (strncmp("FIN", msg, 3)) {
+				if (strncmp("FIN", msg, 3) == 0) {
 					return 1;
 				}
 				else{
@@ -145,7 +151,7 @@ int conversation(int ordre) {
 		} else {
 			res = reception(msg, 256);
 			if (res == 0){
-				if (strncmp("FIN", msg, 3)) {
+				if (strncmp("FIN", msg, 3) == 0) {
 					return 1;
 				}
 				else{
@@ -155,9 +161,10 @@ int conversation(int ordre) {
 			else{
 				return 1;
 			}
+			res = 0;
 			res = envoi(msg, 256);
 			if (res == 0) {
-				if (strncmp("FIN", msg, 3)){
+				if (strncmp("FIN", msg, 3) == 0){
 					return 0;
 				}
 				else{
@@ -172,20 +179,45 @@ int conversation(int ordre) {
 }
 
 int main (int argc, char *argv[]) {
+	/* Reccupere le port passe en argument, si aucun port n'est renseigne, le port est la constante PORT */
+	int port;
+	char ip[50];
+	if (argc >= 2) {
+		port = atoi(argv[1]);
+	} else {
+		port = PORT;
+	}
+
+	if (argc >= 3) {
+		strcpy (ip, argv[2]);
+	} else {
+		strcpy (ip, IP);
+	}
+
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
-	int res = connexion("162.38.111.15",2500);
-	if (res < 0) {
-		erreur("Erreur de connexion au serveur");
-	}
-	else {
-		printf("Connexion au serveur réussie");
-	}
 	int retour = 1;
+	int res = 0;
+
 	while (retour > 0) {
-		printf("Attente du serveur");
-		int ordre = attente();
-		retour = conversation(ordre);
+		retour = 1;
+		res = connexion(ip, port);
+		while (retour > 0) {
+			retour = 1;
+			if (res < 0) {
+				erreur("Erreur de connexion au serveur");
+			}
+			else {
+				printf("Connexion au serveur réussie\n");
+			}
+			printf("Attente de l'autre client\n");
+			int ordre = attente();
+
+			printf("%d", ordre);
+			printf("Debut de conversation\n");
+			retour = conversation(ordre);
+			printf("retour conv %d\n", retour);
+		}
 	}
 	return 0;
 }

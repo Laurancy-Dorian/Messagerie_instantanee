@@ -165,8 +165,9 @@ int reception (int socClient, char* msg, int taille) {
 */
 int attribuerOrdre(int socClient1, int socClient2) {
 	int res1 = envoi(socClient1, "NUM1");
+	printf("res1 %d\n", res1);
 	int res2 = envoi(socClient2, "NUM2");
-
+	printf("res2 %d\n", res2);
 	if ((res1 > 0) && (res2 > 0)) {
 		return 0;
 	} else {
@@ -187,6 +188,8 @@ int attribuerOrdre(int socClient1, int socClient2) {
 *			 0 sinon
 */
 int envoi_reception (int socEnvoyeur, int socReceveur) {
+	printf("envoyeur : %d \n", socEnvoyeur);
+	printf("Receveur : %d\n", socReceveur);
 	/* Initialisation du buffer */
 	char str[TAILLE_BUFFER];
 	int res;
@@ -195,24 +198,34 @@ int envoi_reception (int socEnvoyeur, int socReceveur) {
 	/* ---- RECEPTION ---- */
 	/* Attend le message du client envoyeur */
 	res = reception (socEnvoyeur, str, 0);
+	printf("Message de retour recs : %d\n", res);
+	printf("Message recu : %s\n", str);
 
 	/* Erreur lors de la reception */
 	if (res < 0) {
+		printf("erreur");
 		return -1;
-	} else if (res == 0 || strncmp ("FIN", str, 3)) { /* Le client s'est deconnecte */
+	} else if (res == 0 || strncmp ("FIN", str, 3) == 0) { /* Le client s'est deconnecte */
 		retour = socEnvoyeur;
+		printf("socEnvoyeur fini\n");
+		strcpy(str, "FIN");
 	}
 
 
 	/* ---- ENVOI ---- */
 	/* Envoie le message au receveur */
+	res = 0;
 	res = envoi (socReceveur, str);
+	printf("Message de retour envoi : %d\n", res);
+	printf("Message envoye : %s\n", str);
+
 
 	/* Erreur lors de l'envoi */
 	if (res < 0) {
 		return -2;
-	} else if (res == 0 || strncmp ("FIN", str, 3)) { /* Le client s'est deconnecte */
+	} else if (res == 0) { /* Le client s'est deconnecte */
 		if (retour == 0) {	/* L'autre client n'est pas deconnecte */
+			printf("Envoi de FIN a l'envoyeur\n");
 			envoi (socEnvoyeur, "FIN");
 			retour = socReceveur;
 		} else {
@@ -256,6 +269,7 @@ int conversation (int socClient1, int socClient2) {
 
 		/* Envoi du client 1 au client 2 */
 		res = envoi_reception(envoyeur, receveur);
+		printf("Valeur Envoi_reception %d\n", res);
 
 		/* Personne ne s'est deco ou n'a envoye "FIN" */
 		if (res == 0) {
@@ -363,10 +377,10 @@ int main (int argc, char *argv[]) {
 	int resInit = initialisation(port);
 
 	if (resInit == -1) {
-		perror ("Erreur lors du nommage du Socket Serveur\n");
+		perror ("Erreur lors du nommage du Socket Serveur");
 		fermer();
 	} else if (resInit == -2) {
-		perror ("Erreur lors de l'ecoute du Socket Serveur\n");
+		perror ("Erreur lors de l'ecoute du Socket Serveur");
 		fermer();
 	} else {
 		printf("* -- SERVEUR INITIALISE -- *\n");
@@ -388,7 +402,7 @@ int main (int argc, char *argv[]) {
 		int dernierConnecte = 0;
 
 		for (i = 0; i<NB_CLIENTS; i++) {
-			if (socketClients[i] < 0) {
+			
 				printf ("Attente de connexion d'un client\n");
 
 				int resConnexion = attenteConnexion(&socketClients[i], &adClient[i]);
@@ -405,7 +419,7 @@ int main (int argc, char *argv[]) {
 					fermer();
 				}
 
-			}
+			
 		}
 
 		if (socketClients[0] > 0 && socketClients[1] > 0) {
@@ -415,11 +429,7 @@ int main (int argc, char *argv[]) {
 			
 			printf("* -- FIN DE LA CONVERSATION -- *\n");
 
-			if (resConv == 0) { /* Le c1 s'est deco */
-				deconnecterSocket(dernierConnecte);
-			} else if (resConv == 1) { /* Le c2 s'est deco */
-				deconnecterSocket(1 - dernierConnecte);
-			} else { /* Tous les clients sont decos */
+			if (resConv <= 0) { /* Le c1 s'est deco */
 				deconnecterSocket(-1);
 			}
 		} else {
