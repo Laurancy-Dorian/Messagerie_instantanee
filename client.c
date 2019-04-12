@@ -23,13 +23,9 @@ char* IP = "127.0.0.1";
 int socketClient; /* Socket (global pour la fonction "fermer" */
 struct sockaddr_in adServ;
 
-/*Connecte le client au serveur, retourne 0 si ok, -1 sinon */
-int connexion(char *ip, int port) {
-	/* -- Donnee preliminaire : Taille de la socket -- */
-	socklen_t lgA = sizeof(struct sockaddr_in);
 
-
-	/* -- Debut -- */
+/* Initialise le serveur */
+void initialitation(char *ip, int port) {
 	/* Creation de la socket IPV4 / TCP*/
 	socketClient = socket(PF_INET, SOCK_STREAM, 0);
 
@@ -38,7 +34,12 @@ int connexion(char *ip, int port) {
 	adServ.sin_family = AF_INET; /* IPV4 */
 	adServ.sin_port = htons(port);	/* Port */
 	inet_pton(AF_INET, ip, &(adServ.sin_addr)); /* Adresse IP */
+}
 
+/*Connecte le client au serveur, retourne 0 si ok, -1 sinon */
+int connexion() {
+	/* -- Taille de la socket -- */
+	socklen_t lgA = sizeof(struct sockaddr_in);
 
 	/* Connexion au serveur */
 	int res = connect(socketClient, (struct sockaddr *) &adServ, lgA) ;
@@ -196,28 +197,34 @@ int main (int argc, char *argv[]) {
 
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
+
+
+	/* INITIALISATION */
+	
+
 	int retour = 1;
 	int res = 0;
 
 	while (retour > 0) {
 		retour = 1;
-		res = connexion(ip, port);
-		while (retour > 0) {
-			retour = 1;
-			if (res < 0) {
-				erreur("Erreur de connexion au serveur");
-			}
-			else {
-				printf("Connexion au serveur réussie\n");
-			}
-			printf("Attente de l'autre client\n");
-			int ordre = attente();
-
-			printf("%d", ordre);
-			printf("Debut de conversation\n");
-			retour = conversation(ordre);
-			printf("retour conv %d\n", retour);
+		initialitation(ip, port);
+		res = connexion();
+		if (res < 0) {
+			erreur("Erreur de connexion au serveur");
 		}
+		else {
+			printf("Connexion au serveur réussie\n");
+		}
+		printf("Attente de l'autre client\n");
+		int ordre = attente();
+
+		printf("%d", ordre);
+		printf("Debut de conversation\n");
+		retour = conversation(ordre);
+		printf("retour conv %d\n", retour);
+
+		close(socketClient);
+		
 	}
 	return 0;
 }
