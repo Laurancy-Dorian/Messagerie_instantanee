@@ -23,6 +23,55 @@ char* IP = "127.0.0.1";
 int socketClient; /* Socket (global pour la fonction "fermer" */
 struct sockaddr_in adServ;
 
+/* Ferme le socket et quitte le programme */
+void fermer() {
+	printf("\n* -- INTERRUPTION DU PROGRAMME (CTRL+C) -- *\n");
+	int res = close(socketClient);
+	if (res == 0) {
+		printf("\n* -- FERMETURE DU SOCKET -- *\n");
+	} else {
+		perror("\nErreur fermeture du socket\n");
+		exit(-1);
+	}
+	exit(0);
+}
+
+/* Affiche une erreur et quitte le programme */
+void erreur(char *erreur) {
+	perror(erreur);
+	fermer();
+}
+
+int envoiMessage (char *msg) {
+	return (int) send(socketClient, msg, strlen(msg)+1, 0);
+}
+
+/* Envoi du message et Message de confirmation de l'envoi */
+int envoi(char *msg, int taillemsg) {
+	ssize_t envoi;
+	printf("==> ");
+	fgets(msg, taillemsg, stdin);
+	char *pos = strchr(msg, '\n');
+	*pos = '\0';
+
+	envoi = envoiMessage(msg);
+
+	if (envoi < 0) {
+		return -1;
+	} else {
+		return 0;
+	}
+}
+
+/* Réception du message */
+int reception(char *str, int taillestr) {
+	ssize_t reception = recv (socketClient, str, taillestr, 0);
+	if (reception < 0) {
+		return -1;
+	} else {
+		return 0;
+	}
+}
 
 /* Initialise le serveur */
 void initialitation(char *ip, int port) {
@@ -38,6 +87,7 @@ void initialitation(char *ip, int port) {
 
 /*Connecte le client au serveur, retourne 0 si ok, -1 sinon */
 int connexion() {
+
 	/* -- Taille de la socket -- */
 	socklen_t lgA = sizeof(struct sockaddr_in);
 
@@ -52,72 +102,41 @@ int connexion() {
 
 }
 
-/*Début */
+
 /*Attente du message du serveur pour l'ordre */
 int attente() {
 	char str[10];
-	/* GERER CAS 0 */
-	ssize_t reception = recv (socketClient, str, 256, 0);
-	printf("reception %d\n", (int) reception);
-	if (reception < 0) {
-		printf("PAS DE REC \n");
-		return -1;
-	}else if (strcmp(str, "NUM1") == 0) {
-		return 0;
-	}
-	else if (strcmp(str, "NUM2") == 0) {
-		return 1;
-	}
-	else {
-		return -1;
-	}
+	ssize_t res = reception(str, 10);
+	int ordre;
 
-}
-
-/* Ferme le socket et quitte le programme */
-void fermer() {
-	printf("\nINTERRUPTION DU PROGRAMME (CTRL+C)\n");
-	int res = close(socketClient);
-	if (res == 0) {
-		printf("\nFermeture du socket\n");
-	} else {
-		perror("\nErreur fermeture du socket\n");
-	}
-	exit(0);
-}
-
-/* Affiche une erreur et quitte le programme */
-void erreur(char *erreur) {
-	perror(erreur);
-	fermer();
-}
-
-/* Envoi du message et Message de confirmation de l'envoi */
-int envoi(char *msg, int taillemsg) {
-	ssize_t envoi;
-	printf("Entrez un message :\n");
-	fgets(msg, taillemsg, stdin);
-	char *pos = strchr(msg, '\n');
-	*pos = '\0';
-
-	envoi = send(socketClient, msg, strlen(msg)+1, 0);
-
-	if (envoi < 0) {
+	if (res < 0) {
+		envoiMessage("KO");
 		return -1;
 	} else {
-		return 0;
+		envoiMessage("OK");
+
+		if (strcmp(str, "NUM1") == 0) {
+			ordre = 0;
+		}
+		else if (strcmp(str, "NUM2") == 0) {
+			ordre = 1;
+		}
+		else {
+			return -1;
+		}
+
+		res = reception(str, 10);
+		if (strcmp(str, "BEGIN") == 0) {
+			return ordre;
+		}
+		else {
+			return -1;
+		}
+
 	}
+
 }
 
-/* Réception du message */
-int reception(char *str,int taillestr) {
-	ssize_t reception = recv (socketClient, str, taillestr, 0);
-	if (reception < 0) {
-		return -1;
-	} else {
-		return 0;
-	}
-}
 
 int conversation(int ordre) {
 	char msg[256];
@@ -126,11 +145,8 @@ int conversation(int ordre) {
 		if (ordre == 0){
 			res = envoi(msg, 256);
 			if (res == 0) {
-				if (strncmp("FIN", msg, 3) == 0){
+				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
 					return 0;
-				}
-				else{
-					printf("Message envoyé \n");
 				}
 			}
 			else {
@@ -139,11 +155,11 @@ int conversation(int ordre) {
 			res = 0;
 			res = reception(msg, 256);
 			if (res == 0){
-				if (strncmp("FIN", msg, 3) == 0) {
+				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
 					return 1;
 				}
 				else{
-					printf("Message reçu : %s\n", msg);
+					printf("~~~~~> %s\n", msg);
 				}
 			}
 			else{
@@ -152,11 +168,11 @@ int conversation(int ordre) {
 		} else {
 			res = reception(msg, 256);
 			if (res == 0){
-				if (strncmp("FIN", msg, 3) == 0) {
+				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
 					return 1;
 				}
 				else{
-					printf("Message reçu : %s\n", msg);
+					printf("~~~~~> %s\n", msg);
 				}
 			}
 			else{
@@ -165,11 +181,8 @@ int conversation(int ordre) {
 			res = 0;
 			res = envoi(msg, 256);
 			if (res == 0) {
-				if (strncmp("FIN", msg, 3) == 0){
+				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
 					return 0;
-				}
-				else{
-					printf("Message envoyé \n");
 				}
 			}
 			else {
@@ -199,32 +212,38 @@ int main (int argc, char *argv[]) {
 	signal(SIGINT, fermer);
 
 
-	/* INITIALISATION */
-	
-
 	int retour = 1;
-	int res = 0;
+	int res;
 
 	while (retour > 0) {
 		retour = 1;
+
+		/* INITIALISATION ET CONNEXION*/
 		initialitation(ip, port);
 		res = connexion();
 		if (res < 0) {
 			erreur("Erreur de connexion au serveur");
 		}
 		else {
-			printf("Connexion au serveur réussie\n");
+			printf("* -- CONNEXION -- *\n");
 		}
-		printf("Attente de l'autre client\n");
+
+
+		printf("* -- ATTENTE DE L'AUTRE CLIENT -- *\n");
 		int ordre = attente();
 
-		printf("%d", ordre);
-		printf("Debut de conversation\n");
-		retour = conversation(ordre);
-		printf("retour conv %d\n", retour);
+		if (ordre >= 0) {
+			printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
+
+			retour = conversation(ordre);
+
+			printf("\n* -- FIN DE LA CONVERSATION -- *\n");
+		}
 
 		close(socketClient);
 		
 	}
+
+	fermer();
 	return 0;
 }

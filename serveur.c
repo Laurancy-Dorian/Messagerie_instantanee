@@ -134,7 +134,7 @@ int attenteConnexion(int* socClient, struct sockaddr_in *donneesClient) {
 *	return : 	le nombre d'octets envoyes en cas de reussite, -1 sinon
 */
 int envoi (int socClient, char* msg) {
-	return (int) send(socClient, msg, strlen(msg)+1, 0);
+	return (int) send(socClient, msg, strlen(msg)+1, MSG_NOSIGNAL);
 }
 
 /*
@@ -164,15 +164,30 @@ int reception (int socClient, char* msg, int taille) {
 *	return :	0 si ok, -1 si ko
 */
 int attribuerOrdre(int socClient1, int socClient2) {
-	int res1 = envoi(socClient1, "NUM1");
-	printf("res1 %d\n", res1);
-	int res2 = envoi(socClient2, "NUM2");
-	printf("res2 %d\n", res2);
-	if ((res1 > 0) && (res2 > 0)) {
-		return 0;
-	} else {
+	char str[3];
+	int res;
+
+	envoi(socClient1, "NUM1");
+	res = reception(socClient1, str, 3);
+	if (res <= 0 || strncmp("OK", str, 2) != 0) {
+		envoi(socClient1, "KO");
+		envoi(socClient2, "KO");
+		printf("KO 1 ENVOYE \n");
 		return -1;
 	}
+
+	envoi(socClient2, "NUM2");
+	res = reception(socClient2, str, 3);
+	if (res <= 0 || strncmp("OK", str, 2) != 0) {
+		envoi(socClient1, "KO");
+		envoi(socClient2, "KO");
+		return -1;
+	}
+
+	envoi(socClient1, "BEGIN");
+	envoi(socClient2, "BEGIN");
+
+	return 0;
 }
 
 /*
@@ -188,8 +203,6 @@ int attribuerOrdre(int socClient1, int socClient2) {
 *			 0 sinon
 */
 int envoi_reception (int socEnvoyeur, int socReceveur) {
-	printf("envoyeur : %d \n", socEnvoyeur);
-	printf("Receveur : %d\n", socReceveur);
 	/* Initialisation du buffer */
 	char str[TAILLE_BUFFER];
 	int res;
@@ -198,16 +211,12 @@ int envoi_reception (int socEnvoyeur, int socReceveur) {
 	/* ---- RECEPTION ---- */
 	/* Attend le message du client envoyeur */
 	res = reception (socEnvoyeur, str, 0);
-	printf("Message de retour recs : %d\n", res);
-	printf("Message recu : %s\n", str);
 
 	/* Erreur lors de la reception */
 	if (res < 0) {
-		printf("erreur");
 		return -1;
-	} else if (res == 0 || strncmp ("FIN", str, 3) == 0) { /* Le client s'est deconnecte */
+	} else if (res == 0 || (strlen(str) == 3 && strncmp ("FIN", str, 3) == 0)) { /* Le client s'est deconnecte */
 		retour = socEnvoyeur;
-		printf("socEnvoyeur fini\n");
 		strcpy(str, "FIN");
 	}
 
@@ -216,16 +225,12 @@ int envoi_reception (int socEnvoyeur, int socReceveur) {
 	/* Envoie le message au receveur */
 	res = 0;
 	res = envoi (socReceveur, str);
-	printf("Message de retour envoi : %d\n", res);
-	printf("Message envoye : %s\n", str);
-
 
 	/* Erreur lors de l'envoi */
 	if (res < 0) {
 		return -2;
 	} else if (res == 0) { /* Le client s'est deconnecte */
 		if (retour == 0) {	/* L'autre client n'est pas deconnecte */
-			printf("Envoi de FIN a l'envoyeur\n");
 			envoi (socEnvoyeur, "FIN");
 			retour = socReceveur;
 		} else {
@@ -256,12 +261,6 @@ int envoi_reception (int socEnvoyeur, int socReceveur) {
 int conversation (int socClient1, int socClient2) {
 	int res = 0;
 
-	/* Attribue ordre */
-	res = attribuerOrdre(socClient1, socClient2);
-	if (res < 0) {
-		return -1;
-	}
-
 	int envoyeur = socClient1;
 	int receveur = socClient2;
 
@@ -269,7 +268,6 @@ int conversation (int socClient1, int socClient2) {
 
 		/* Envoi du client 1 au client 2 */
 		res = envoi_reception(envoyeur, receveur);
-		printf("Valeur Envoi_reception %d\n", res);
 
 		/* Personne ne s'est deco ou n'a envoye "FIN" */
 		if (res == 0) {
@@ -316,14 +314,8 @@ void deconnecterSocket(int numSocket) {
 
 	int i;
 	for (i = debut; i < fin; i++) {
-		/* Reccupere l'IP du client et l'affiche*/
-		char ipclient[50];
-		inet_ntop(AF_INET, &(adClient[i].sin_addr), ipclient, INET_ADDRSTRLEN);	
-		printf ("Le client %s s'est deconnecte\n", ipclient);
-
-		/* Deconnecte et Reinitialise les donnees pour cette case */
+		/* Deconnecte */
 		shutdown (socketClients[i], 2);
-		socketClients[i] = -1;
 	}
 
 }
@@ -391,54 +383,40 @@ int main (int argc, char *argv[]) {
 		printf("IP : %s\nPort : %d\n", ipServ, port);
 	}
 
-	/* Initialise les sockets des clients à -1 (pour verification plus tard) */
-	for (int c = 0; c < NB_CLIENTS; c++) {
-		socketClients[c] = -1;
-	}
-
 	/* --- BOUCLE PRINCIPALE --- */
 	while (1) {
-		int i = 0;
-		int dernierConnecte = 0;
-
+		int i;
 		for (i = 0; i<NB_CLIENTS; i++) {
-			
-				printf ("Attente de connexion d'un client\n");
+			socketClients[i] = 0;
+			printf ("Attente de connexion d'un client\n");
 
-				int resConnexion = attenteConnexion(&socketClients[i], &adClient[i]);
-				dernierConnecte = i;
+			int resConnexion = attenteConnexion(&socketClients[i], &adClient[i]);
 
-				if (resConnexion == 0) {
-					/* Reccupere l'IP du client et l'affiche*/
-					char ipclient[50];
-					inet_ntop(AF_INET, &(adClient[i].sin_addr), ipclient, INET_ADDRSTRLEN);	
+			if (resConnexion == 0) {
+				/* Reccupere l'IP du client et l'affiche*/
+				char ipclient[50];
+				inet_ntop(AF_INET, &(adClient[i].sin_addr), ipclient, INET_ADDRSTRLEN);	
 
-					printf ("Client %s connecte !\n", ipclient);
-				} else {
-					perror ("Erreur lors de la connexion au client\n");
-					fermer();
-				}
-
-			
-		}
-
-		if (socketClients[0] > 0 && socketClients[1] > 0) {
-			printf("* -- DEBUT DE LA CONVERSATION -- *\n");
-
-			int resConv = conversation(socketClients[dernierConnecte], socketClients[1-dernierConnecte]);
-			
-			printf("* -- FIN DE LA CONVERSATION -- *\n");
-
-			if (resConv <= 0) { /* Le c1 s'est deco */
-				deconnecterSocket(-1);
+				printf ("Client %s connecte !\n\n", ipclient);
+			} else {
+				perror ("Erreur lors de la connexion au client\n");
 			}
-		} else {
-			/* S'il n'y a pas deux clients de connectes lors de cette phase, on deconnecte tous les clients */
-			printf ("Erreur lors de la connexion des deux pairs\n");
-			deconnecterSocket(-1);
 		}
 
+		/* Attribue ordre */
+		int resOrdre = attribuerOrdre(socketClients[1], socketClients[0]);
+
+		if (resOrdre == 0) {
+			printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
+
+			conversation(socketClients[1], socketClients[0]);
+			
+			printf("\n* -- FIN DE LA CONVERSATION -- *\n");
+		} 
+		
+		deconnecterSocket(-1);
 	}
 
+	fermer();
 	return 0;
 }
