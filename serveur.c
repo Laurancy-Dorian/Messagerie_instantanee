@@ -26,7 +26,7 @@
 
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
-* 	"fermer" puisse y acceder (car elle est declenchee par un CTRL + C) 
+* 	"fermer" puisse y acceder (car elle peut etre declenchee par un CTRL + C) 
 */
 int socketServeur; 
 int socketClients[NB_CLIENTS];
@@ -167,23 +167,33 @@ int attribuerOrdre(int socClient1, int socClient2) {
 	char str[3];
 	int res;
 
+	/* Envoi au premier client "NUM1" */
 	envoi(socClient1, "NUM1");
+
+	/* Reception de la confirmation "OK" du premier client */
 	res = reception(socClient1, str, 3);
+
+	/* Si le client a envoye "KO" ou n'a pas repondu, envoie "KO" a tout le monde */
 	if (res <= 0 || strncmp("OK", str, 2) != 0) {
 		envoi(socClient1, "KO");
 		envoi(socClient2, "KO");
-		printf("KO 1 ENVOYE \n");
 		return -1;
 	}
 
+	/* Envoi au deuxieme client "NUM2" */
 	envoi(socClient2, "NUM2");
+
+	/* Reception de la confirmation "OK" du deuxieme client */
 	res = reception(socClient2, str, 3);
+
+	/* Si le client a envoye "KO" ou n'a pas repondu, envoie "KO" a tout le monde */
 	if (res <= 0 || strncmp("OK", str, 2) != 0) {
 		envoi(socClient1, "KO");
 		envoi(socClient2, "KO");
 		return -1;
 	}
 
+	/* Envoie de BEGIN aux deux clients */
 	envoi(socClient1, "BEGIN");
 	envoi(socClient2, "BEGIN");
 
@@ -230,10 +240,10 @@ int envoi_reception (int socEnvoyeur, int socReceveur) {
 	if (res < 0) {
 		return -2;
 	} else if (res == 0) { /* Le client s'est deconnecte */
-		if (retour == 0) {	/* L'autre client n'est pas deconnecte */
+		if (retour == 0) {	/* L'autre client n'est pas deconnecte, on le previent que la conversation est terminee */
 			envoi (socEnvoyeur, "FIN");
 			retour = socReceveur;
-		} else {
+		} else {	/* L'autre client est aussi deconnecte */
 			retour = -3;
 		}
 	}
@@ -386,6 +396,8 @@ int main (int argc, char *argv[]) {
 	/* --- BOUCLE PRINCIPALE --- */
 	while (1) {
 		int i;
+
+		/* Attend la connexion de tous les clients */
 		for (i = 0; i<NB_CLIENTS; i++) {
 			socketClients[i] = 0;
 			printf ("Attente de connexion d'un client\n");
@@ -403,9 +415,12 @@ int main (int argc, char *argv[]) {
 			}
 		}
 
+
+
 		/* Attribue ordre */
 		int resOrdre = attribuerOrdre(socketClients[1], socketClients[0]);
 
+		/* Lancement de la conversation */
 		if (resOrdre == 0) {
 			printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
 
@@ -413,10 +428,13 @@ int main (int argc, char *argv[]) {
 			
 			printf("\n* -- FIN DE LA CONVERSATION -- *\n");
 		} 
-		
+
+
+		/* Deconnecte tous les clients */
 		deconnecterSocket(-1);
 	}
 
+	/* Ferme le serveur */
 	fermer();
 	return 0;
 }
