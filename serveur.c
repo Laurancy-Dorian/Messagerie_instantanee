@@ -19,10 +19,11 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 /* Definition de constantes */
 #define PORT 2500
-#define NB_MAX_CLIENTS 12
+#define NB_MAX_CLIENTS 2
 #define TAILLE_BUFFER 2048
 #define TAILLE_PSEUDO 128
 
@@ -41,13 +42,12 @@ struct sockaddr_in adClient[NB_MAX_CLIENTS];
 
 socklen_t lgA = sizeof(struct sockaddr_in);	
 
-/* Le nombre de clients connectés actuellement */
-int nb_clients = 0;
-
-
 /* Mutex pour le numero du client dans le tableau : Cette valeur tres importante pour le thread du client 
 * (position dans le tableau des sockets) etait remplacee avant d'arriver dans le thread, ce mutex resoud le probleme */
 pthread_mutex_t mutex_numClient;
+
+/* Ce semaphore permet de ne plus accepter de nouveaux clients lorsqu'il y a autant de clients que NB_MAX_CLIENTS */
+sem_t semaphore_nb_clients; 
 
 
 /*
@@ -73,7 +73,7 @@ int initialisation (int port) {
 		return -1;
 	}
 
-	/* Ecoute jusqu'a NB_CLIENTS clients*/
+	/* Ecoute jusqu'a NB_MAX_CLIENTS clients*/
 	res = listen (socketServeur, NB_MAX_CLIENTS);
 	if (res < 0) {
 		return -2;
@@ -174,10 +174,14 @@ void deconnecterSocket(int numSocket) {
 	for (i = debut; i < fin; i++) {
 		if (socketClients[i] != -1) {
 			printf ("Client n°%d %s deconnecte\n\n", i, pseudoClients[i]);
+
+			/* Envoie "FIN" au client pour qu'il se deconnecte de son conte */
 			envoi(socketClients[i], "FIN");
 			shutdown (socketClients[i], 2);
 			socketClients[i] = -1;
-			nb_clients--;
+
+			/* Libere un jeton dans le semaphore */
+			sem_post(&semaphore_nb_clients);
 		}
 	}
 
@@ -200,6 +204,10 @@ void fermer() {
 	} else {
 		perror("Erreur fermeture  du socket serveur\n");
 	}
+
+	/* Ferme les semaphores */
+	sem_destroy(&semaphore_nb_clients);
+	pthread_mutex_destroy(&mutex_numClient);
 
 	printf("* -- FIN DU PROGRAMME -- *\n");
 
@@ -271,6 +279,7 @@ void *conversation (int* numcli) {
 	strcpy(pseudoClients[numClient], str);
 
 	if (resPseudo > 3) {
+		envoi(socketClients[numClient], "BEGIN");
 		/* Envoie un message de connexion a tous les clients */
 		sprintf(str, ">>>> %s s'est connecte", pseudoClients[numClient]);
 		broadcast(numClient, str);
@@ -279,11 +288,11 @@ void *conversation (int* numcli) {
 		while(res == 0) {
 			res = envoi_reception(numClient);
 		}
-	}
 
-	/* Envoie le message de deconnexion a tous les clients */
-	sprintf(str, "<<<< %s s'est deconnecte", pseudoClients[numClient]);
-	broadcast(numClient, str);
+		/* Envoie le message de deconnexion a tous les clients */
+		sprintf(str, "<<<< %s s'est deconnecte", pseudoClients[numClient]);
+		broadcast(numClient, str);
+	}
 
 	/* Deconnecte et quitte le thread */
 	deconnecterSocket (numClient);
@@ -365,9 +374,11 @@ int main (int argc, char *argv[]) {
 
 	/* Init du mutex sur numClient */
 	pthread_mutex_init(&mutex_numClient,0);
+	sem_init(&semaphore_nb_clients, 0, NB_MAX_CLIENTS);
 
 	/* --- BOUCLE PRINCIPALE --- */
 	while (1) {
+		sem_wait(&semaphore_nb_clients);
 		
 		/* Lock du mutex pour numClient */
 		pthread_mutex_lock(&mutex_numClient);
@@ -399,7 +410,6 @@ int main (int argc, char *argv[]) {
 		/* Cree un thread dedie pour ce client */
 		pthread_create(&threadClients[numClient], 0, (void*) conversation, &numClient);
 
-		nb_clients++;
 	}
 
 	/* Ferme le serveur */

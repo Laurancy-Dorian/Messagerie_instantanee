@@ -28,8 +28,9 @@ char* IP = "127.0.0.1";
 */
 int socketClient; 
 struct sockaddr_in adServ;
-int fin;
 
+/* Cette variable assure la communication entre les deux threads */
+int fin;
 pthread_mutex_t mutex_fin;
 
 
@@ -77,6 +78,8 @@ int getMsgTerminal(char* msg, int taille) {
 	return strlen(msg);
 }
 
+
+
 /* 
 * 	Demande a l'utilisateur de taper un message et l'envoie au serveur
 *	param :	char*	msg 		Le message envoye sera stocke dans cette variable
@@ -87,7 +90,11 @@ int envoi(char *msg, int taillemsg) {
 	ssize_t envoi;
 
 	/* Lecture du message */
-	getMsgTerminal(msg, taillemsg);
+	int res = getMsgTerminal(msg, taillemsg);
+
+	if (res == -1) {
+		return 0;
+	}
 
 	/* Envoi */
 	envoi = envoiMessage(msg);
@@ -141,14 +148,7 @@ int connexion() {
 	socklen_t lgA = sizeof(struct sockaddr_in);
 
 	/* Connexion au serveur */
-	int res = connect(socketClient, (struct sockaddr *) &adServ, lgA) ;
-	/* Confirmation de connexion */
-	if (res < 0) {
-		return -1;
-	} else {
-		return 0;
-	}
-
+	return connect(socketClient, (struct sockaddr *) &adServ, lgA) ;
 }
 
 /* 
@@ -226,7 +226,7 @@ void *ecrire() {
 int conversation() {
 	fin = -1;
 
-	//création des 2 threads 
+	//creation des 2 threads 
 	pthread_t lecture;
 	pthread_t ecriture;
 	pthread_create(&lecture, 0, lire, 0);
@@ -294,15 +294,24 @@ int main (int argc, char *argv[]) {
 	printf("Votre pseudo est : %s\n", pseudo);
 	envoiMessage(pseudo);
 
-	/* Init du mutex sur fin */
-	pthread_mutex_init(&mutex_fin,0);
+	/* Attend le message "BEGIN" du serveur. Si le client attend longtemps ici, cela veut dire qu'il n'y a plus de
+	*  place dans la conversation. Le client sera alors connecte lorsqu'un autre client quittera 
+	*/
+	printf("Veuillez patienter, vous etes en file d'attente...\n");
+	char str[128];
+	int resDebut = reception(str, 128);
+	if (resDebut == 0 && strlen(str) == 5 && strncmp("BEGIN", str, 5) == 0) {
 
-	/* Si les deux pairs sont bien connectes, lance la conversation */
-	printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
+		/* Init du mutex sur fin */
+		pthread_mutex_init(&mutex_fin,0);
 
-	conversation();
+		/* Si les deux pairs sont bien connectes, lance la conversation */
+		printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
 
-	printf("\n* -- FIN DE LA CONVERSATION -- *\n");
+		conversation();
+
+		printf("\n* -- FIN DE LA CONVERSATION -- *\n");
+	}
 
 	/* Ferme la connexion avec le serveur */
 	close(socketClient);
