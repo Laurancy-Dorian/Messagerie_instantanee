@@ -360,7 +360,9 @@ void ipServeur(char* ip) {
 	
 }
 
-
+/*
+*	./serveur [PORT]
+*/
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);

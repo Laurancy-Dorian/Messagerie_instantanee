@@ -264,6 +264,9 @@ int conversation(int ordre) {
 	}
 }
 
+/*
+*	./client [PORT] [IP]
+*/
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
