@@ -22,8 +22,9 @@
 
 /* Definition de constantes */
 #define PORT 2500
-#define NB_MAX_CLIENTS 2
+#define NB_MAX_CLIENTS 12
 #define TAILLE_BUFFER 2048
+#define TAILLE_PSEUDO 128
 
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
@@ -31,6 +32,8 @@
 */
 int socketServeur; 
 int socketClients[NB_MAX_CLIENTS];
+char pseudoClients[NB_MAX_CLIENTS][TAILLE_PSEUDO];
+pthread_t threadClients[NB_MAX_CLIENTS];
 
 /* Structures contenant les donnees du serveur et des clients */
 struct sockaddr_in adServ;
@@ -39,8 +42,12 @@ struct sockaddr_in adClient[NB_MAX_CLIENTS];
 socklen_t lgA = sizeof(struct sockaddr_in);	
 
 /* Le nombre de clients connectés actuellement */
-int nb_client = 0;
+int nb_clients = 0;
 
+
+/* Mutex pour le numero du client dans le tableau : Cette valeur tres importante pour le thread du client 
+* (position dans le tableau des sockets) etait remplacee avant d'arriver dans le thread, ce mutex resoud le probleme */
+pthread_mutex_t mutex_numClient;
 
 
 /*
@@ -124,28 +131,67 @@ int reception (int socClient, char* msg, int taille) {
 	return (int) recv (socClient, msg, taille, 0);
 }
 
+/* 
+*	Envoie le message a tout les clients
+*	param : 	int 	numClient 	Le NUMERO du client qui envoie le message (et non le descripteur de socket)
+*				char*	msg 		La chaine a envoyer
+
+*	return : 	-1 si echec
+*				1 si reussite
+*/
+int broadcast(int numClient, char* msg) {
+	for (int i = 0; i<NB_MAX_CLIENTS; i++) {
+
+		/* Envoie uniquement au clients connectes (socket != -1 sauf au client envoyeur) */
+		if (i != numClient && socketClients[i] != -1) {
+			if (envoi (socketClients[i], msg) == -1) {
+				return -1;
+			}
+		}
+	}
+	return 1;
+}
+
 /*
-* Ferme les sockets et quitte le programme
+*	Deconnecte le socket du client dont le numero du tableau des sockets et passé en parametre
+*	Si le parametre est -1, alors on deconnecte tous les sockets
+* 	
+*	param : 	int 	numSocket	La position du socket dans le tableau
+*/
+void deconnecterSocket(int numSocket) {
+	int debut;
+	int fin;
+
+	if (numSocket == -1) {
+		debut = 0;
+		fin = NB_MAX_CLIENTS;
+	} else {
+		debut = numSocket;
+		fin = numSocket+1;
+	}
+
+	int i;
+	for (i = debut; i < fin; i++) {
+		if (socketClients[i] != -1) {
+			printf ("Client n°%d %s deconnecte\n\n", i, pseudoClients[i]);
+			envoi(socketClients[i], "FIN");
+			shutdown (socketClients[i], 2);
+			socketClients[i] = -1;
+			nb_clients--;
+		}
+	}
+
+}
+
+/*
+* 	Ferme les sockets et quitte le programme
 */
 void fermer() {
 	printf("\n\n* -- FERMETURE DU SERVEUR -- *\n");
 
-	int i;
-
 	/* Ferme tous les sockets clients */
-	for (i = 0; i < NB_MAX_CLIENTS; i++) {
-		int res = 0;
-		if (socketClients[i] > 0) {
-			envoi(socketClients[i], "FIN");
-			res = close (socketClients[i]);
-		}
-		if (res == 0) {
-			printf("Fermeture du socket client numero %d\n", i);
-		} else {
-			printf("Erreur fermeture du socket client numero %d\n", i);
-			perror(NULL);
-		}
-	}
+	deconnecterSocket(-1);
+	printf("Fermeture des sockets clients\n");
 
 	/* Ferme le socket serveur */
 	int res = close(socketServeur);
@@ -162,21 +208,19 @@ void fermer() {
 
 
 /*
-*	Transmet le message du client envoyeur au client receveur
-*	Si l'un des clients envoie "FIN" ou se deconnecte, Envoie "FIN" a l'autre client
-*	param : int 	socEnvoyeur		Le descripteur du socket du client envoyeur
-*			int 	socReceveur		Le descripteur du socket du client receveur
+*	Transmet un message du client a tous les autres clients
+*	Si ce client envoie fin ou se deconnecte, la fonction retourne directement -1
+*	param : int 	numSocEnvoyeur		Le NUMERO du client envoyeur dans le tableau des sockets (pas le descripteur)
 *	return : 
-*			 -1 si erreur lors de la reception du message du client envoyeur
-*			 -2 si erreur lors de l'envoi au client receveur
-*			 -3 si les deux client se sont deconnectes durant cet echange
-			 Si un client se deconnecte ou envoie "FIN", renvoie son descripteur de socket
+*			 -1 si erreur lors de la reception du message du client
+			 1 Si le client se deconnecte ou envoie "FIN"
 *			 0 sinon
 */
-int envoi_reception (int socEnvoyeur) {
+int envoi_reception (int numSocEnvoyeur) {
 	/* Initialisation du buffer */
 	char str[TAILLE_BUFFER];
 	int res;
+	int socEnvoyeur = socketClients[numSocEnvoyeur];
 
 	
 	/* ---- RECEPTION ---- */
@@ -187,77 +231,62 @@ int envoi_reception (int socEnvoyeur) {
 	if (res < 0) {
 		return -1;
 	} else if (res == 0 || (strlen(str) == 3 && strncmp ("FIN", str, 3) == 0)) { /* Le client s'est deconnecte */
-		return socEnvoyeur;
+		return 1;
 	}
+
+	/* Ajout du pseudo dans le message avant de l'envoyer aux autres clients "[pseudo] message" */
+	char msgClient[strlen(pseudoClients[numSocEnvoyeur]) + strlen(str) + 4]; /* (+4) pour les 4 caracteres en plus ([] \0 ' ')*/
+	strcpy(msgClient, "[");
+	strcat(msgClient, pseudoClients[numSocEnvoyeur]);
+	strcat(msgClient, "] ");
+	strcat(msgClient, str);
 
 
 	/* ---- ENVOI ---- */
 	/* Envoie le message aux autres clients */
-	for (int i = 0; i<nb_client; i++) {
-		if (i != socEnvoyeur && socketClients[i] != -1) {
-			res = 0;
-			res = envoi (socketClients[i], str);
-			printf("%d envoie %s à %d", socEnvoyeur, str, i);
-		}
-	}
+	broadcast(numSocEnvoyeur, msgClient);
+
 	return 0;
 
 }
 
-/*
-*	Deconnecte lee socket du client dont le numero du tableau des sockets et passé en parametre
-*	Si le parametre est -1, alors on deconnecte tous les sockets
-* 	
-*	param : 	int 	numSocket	La position du socket
-*/
-void deconnecterSocket(int numSocket) {
-	int debut;
-	int fin;
-
-	if (numSocket == -1) {
-		debut = 0;
-		fin = NB_MAX_CLIENTS;
-	} else {
-		debut = numSocket;
-		fin = numSocket+1;
-	}
-
-	int i;
-	for (i = debut; i < fin; i++) {
-		/* Deconnecte */
-		shutdown (socketClients[i], 2);
-		socketClients[i] = -1;
-	}
-
-}
 
 /*
-*	Effectue la transition des message entre les deux clients
-*	Envoie tout d'abord au client leur ordre :
-*		- "NUM1" au client qui parlera en premier
-*		- "NUM2" au client qui parlera en deuxieme
-*	Transmet ensuite les messages d'un client a un autre
-*	Si un client se deconnecte ou envoie "FIN", envoie "FIN" a l'autre client
+*	Effectue la transition des message entre ce client et les autres clients
+*	Transmet ensuite les messages de ce client a tous les autres
 *
-*	param : 	int 	socClient1 	Le socket du client qui parlera en 1er
-*
-*	return : 	0 si le premier client s'est deconnecte
-*				1 si le deuxieme client s'est deconnecte
-*				2 si les deux clients se sont deconnectes
-*				-1 si erreur
+*	param : 	int 	numcli 	Le NUMERO du client dans le tableau des sockets (pas le descripteur)
 *
 */
-void *conversation (int* numSoc) {
-	int soc = *numSoc;
-	printf("soc : %d\n", soc);
-	
-	while(1) {
-		envoi_reception(soc);
-	}
-	printf ("%d s'est déconnecté\n", soc);
-	deconnecterSocket (soc);
+void *conversation (int* numcli) {
+	/* init de variable et liberation du mutex sur numClient */
+	int numClient = *numcli;
+	pthread_mutex_unlock(&mutex_numClient);
 
-	
+	int res = 0;
+	char str[128];
+
+	/* Reception du pseudo du client */
+	int resPseudo = reception(socketClients[numClient], str, TAILLE_PSEUDO);
+	strcpy(pseudoClients[numClient], str);
+
+	if (resPseudo > 3) {
+		/* Envoie un message de connexion a tous les clients */
+		sprintf(str, ">>>> %s s'est connecte", pseudoClients[numClient]);
+		broadcast(numClient, str);
+
+		/* Boucle de la conversation */
+		while(res == 0) {
+			res = envoi_reception(numClient);
+		}
+	}
+
+	/* Envoie le message de deconnexion a tous les clients */
+	sprintf(str, "<<<< %s s'est deconnecte", pseudoClients[numClient]);
+	broadcast(numClient, str);
+
+	/* Deconnecte et quitte le thread */
+	deconnecterSocket (numClient);
 	pthread_exit(0);
 }
 
@@ -328,21 +357,27 @@ int main (int argc, char *argv[]) {
 		printf("IP : %s\nPort : %d\n", ipServ, port);
 	}
 
+	/* Initialise le tableau des sockets à -1 : Lorsqu'une case est egale a -1, on peut l'ulitilser pour l'attribuer au prochain client */
 	int i = 0;
 	for (i = 0; i < NB_MAX_CLIENTS; i++) {
 		socketClients[i] = -1;
 	}
 
+	/* Init du mutex sur numClient */
+	pthread_mutex_init(&mutex_numClient,0);
+
 	/* --- BOUCLE PRINCIPALE --- */
 	while (1) {
-		i = 0;
+		
+		/* Lock du mutex pour numClient */
+		pthread_mutex_lock(&mutex_numClient);
 		int numClient = -1;
 
-		/* Attend la connexion de tous les clients */
+		/* Recherche un slot disponible dans le tableau pour le prochain client */
+		i = 0;
 		while (i < NB_MAX_CLIENTS && numClient == -1) {
 			if (socketClients[i] == -1) {
 				numClient = i;
-				printf("TROUVE\n");
 			}
 			i++;
 		}
@@ -353,22 +388,18 @@ int main (int argc, char *argv[]) {
 		if (resConnexion == 0) {
 			/* Reccupere l'IP du client et l'affiche*/
 			char ipclient[50];
-			inet_ntop(AF_INET, &(adClient[i].sin_addr), ipclient, INET_ADDRSTRLEN);	
+			inet_ntop(AF_INET, &(adClient[numClient].sin_addr), ipclient, INET_ADDRSTRLEN);	
 
-			printf ("Client %s connecte !\n\n", ipclient);
+			printf ("Client de numero %d et d'ip %s connecte !\n\n", numClient, ipclient);
 		} else {
 			perror ("Erreur lors de la connexion au client\n");
+			deconnecterSocket(numClient);
 		}
-		
 
-		/* Lancement de la conversation */
+		/* Cree un thread dedie pour ce client */
+		pthread_create(&threadClients[numClient], 0, (void*) conversation, &numClient);
 
-		printf("\n* -- CONNEXION DU CLIENT -- *\n");
-
-		pthread_t transfert;
-		printf("%d\n", numClient);
-		pthread_create(&transfert, 0, (void*) conversation, &numClient);
-
+		nb_clients++;
 	}
 
 	/* Ferme le serveur */

@@ -30,19 +30,16 @@ int socketClient;
 struct sockaddr_in adServ;
 int fin;
 
+pthread_mutex_t mutex_fin;
+
 
 /* 
 * Ferme le socket et quitte le programme 
 */
 void fermer() {
 	printf("\n* -- FIN -- *\n");
-	int res = close(socketClient);
-	if (res == 0) {
-		printf("\n* -- FERMETURE DU SOCKET -- *\n");
-	} else {
-		perror("\nErreur fermeture du socket\n");
-		exit(-1);
-	}
+	close(socketClient);
+	printf("\n* -- FERMETURE DU SOCKET -- *\n");
 	exit(0);
 }
 
@@ -65,6 +62,21 @@ int envoiMessage (char *msg) {
 	return (int) send(socketClient, msg, strlen(msg)+1, 0);
 }
 
+/*
+*	Enregistre dans msg ce qui est tape dans le terminal
+*	param :		char* 	msg 	Le buffer ou sera enregistre la chaine
+*				int 	taille 	La taille max de ce buffer
+*	return : La taille de la chaine de caracteres lue
+*/
+int getMsgTerminal(char* msg, int taille) {
+	/* Lecture du pseudo */
+	fgets(msg, taille, stdin);
+	char *pos = strchr(msg, '\n');
+	*pos = '\0';
+
+	return strlen(msg);
+}
+
 /* 
 * 	Demande a l'utilisateur de taper un message et l'envoie au serveur
 *	param :	char*	msg 		Le message envoye sera stocke dans cette variable
@@ -75,10 +87,7 @@ int envoi(char *msg, int taillemsg) {
 	ssize_t envoi;
 
 	/* Lecture du message */
-	printf("==> ");
-	fgets(msg, taillemsg, stdin);
-	char *pos = strchr(msg, '\n');
-	*pos = '\0';
+	getMsgTerminal(msg, taillemsg);
 
 	/* Envoi */
 	envoi = envoiMessage(msg);
@@ -104,6 +113,7 @@ int reception(char *str, int taillestr) {
 		return 0;
 	}
 }
+
 
 /* 
 *	Initialise le serveur
@@ -132,7 +142,7 @@ int connexion() {
 
 	/* Connexion au serveur */
 	int res = connect(socketClient, (struct sockaddr *) &adServ, lgA) ;
-	/* Message de confirmation de connexion */
+	/* Confirmation de connexion */
 	if (res < 0) {
 		return -1;
 	} else {
@@ -141,57 +151,68 @@ int connexion() {
 
 }
 
-
-/* 	Fonction lire 
-*	lis les messages envoyés par l'autre client en boucle.
-*	Si la lecture echoue ou que le message reçu est FIN ferme le thread et met fin à 1.
+/* 
+* 	Assigne une valeur a la variable globale fin et temine le thread
+*	param : 	int 	val 	La valeur a assigner dans fin
 */
-void *lire() {
-	while(1){
-		char msg[256];
-		int res = 0;
-
-		res = reception(msg, 256);
-			if (res == 0){
-				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
-					fin = 1;
-					pthread_exit(0);
-				}
-				else{
-					printf("~~~~~> %s\n", msg);
-				}
-			}
-			else {
-				fin = 1;
-				pthread_exit(0);
-			}
-	}
+void decoThread (int val) {
+	pthread_mutex_lock(&mutex_fin);
+	fin = val;
+	pthread_mutex_unlock(&mutex_fin);
+	pthread_exit(0);
 }
 
-/* 	Fonction ecrire
-*	Envoie les messages du client en boucle.
-*	Si l'envoi echoue ferme le thread et met fin à 0.
+
+/* 	
+*	Fonction *lire 
+*	lis les messages envoyés par l'autre client en boucle.
+*	Si la lecture echoue ou que le message reçu est FIN, ferme le thread et met la variable globale fin à 1.
 */
-void *ecrire() {
-	while(1){
-		/* Envoie le message. Si la chaine est "FIN", ou si l'envoi echoue, 
-		*  retourne 0 (ce client quittera la conversation) */
-		char msg[256];
-		int res = 0;
+void *lire() {
+	char msg[256];
+	int res = 0;
 
-
-		res = envoi(msg, 256);
-		if (res == 0) {
-			if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
-				fin = 0;
-				pthread_exit(0);
+	while (fin < 0) {
+		res = reception(msg, 256);
+		if (res == 0){
+			if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
+				decoThread(1);
+			}
+			else{
+				printf("%s\n", msg);
 			}
 		}
 		else {
-			fin = 0;
-			pthread_exit(0);
+			decoThread(1);
 		}
 	}
+	return NULL;
+}
+
+/* 	
+*	Fonction ecrire
+*	Envoie les messages du client en boucle.
+*	Si l'envoi echoue : ferme le thread et met la variable globale fin à 0.
+*/
+void *ecrire() {
+	char msg[256];
+	int res = 0;
+
+	while(fin < 0){
+		/* Envoie le message. Si la chaine est "FIN", ou si l'envoi echoue, deconnecte */
+		
+		res = envoi(msg, 256);
+		if (res == 0) {
+			if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
+				decoThread(0);
+			}
+		}
+		else {
+			decoThread(0);
+		}
+	}
+
+	return NULL;
 }
 
 
@@ -217,11 +238,16 @@ int conversation() {
 	return fin;
 }
 
+/*
+*	./client [PORT "IP" Pseudo]
+*
+*	Exemple : ./client 2051 "192.168.1.100" Toto
+*/
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
 
-
+	/* --- RECCUPERATION DES PARAMETRES --- */
 	/* Reccupere le port passe en argument, si aucun port n'est renseigne, le port est la constante PORT */
 	int port;
 	char ip[50];
@@ -238,37 +264,49 @@ int main (int argc, char *argv[]) {
 		strcpy (ip, IP);
 	}
 
-
-	int retourConv = 1;
-
-	/* Le client se reconnectera a la fin de chaque conversation si ce n'est pas lui qui a termine la conversation precedente */
-	while (retourConv > 0) {
-		retourConv = 1;
-
-		/* INITIALISATION */
-		initialitation(ip, port);
-
-		/* CONNEXION AU SERVEUR */
-		int resConnexion = connexion();
-		if (resConnexion < 0) {
-			erreur("Erreur de connexion au serveur");
-		}
-		else {
-			printf("* -- CONNEXION -- *\n");
-		}
-
-
-		/* Si les deux pairs sont bien connectes, lance la conversation */
-		printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
-
-		retourConv = conversation();
-
-		printf("\n* -- FIN DE LA CONVERSATION -- *\n");
+	/* Reccupere le pseudo passe en parametre*/
+	char pseudo[128];
+	int resPseudo = 0;
+	if (argc >= 4) {
+		strcpy (pseudo, argv[3]);
+		resPseudo = strlen(pseudo);
+	} 
 	
-		/* Ferme la connexion avec le serveur */
-		close(socketClient);
+
+	/* --- SECTION PRINCIPALE --- */
+	/* INITIALISATION */
+	initialitation(ip, port);
+
+	/* CONNEXION AU SERVEUR */
+	int resConnexion = connexion();
+	if (resConnexion < 0) {
+		erreur("Erreur de connexion au serveur");
+	}
+	else {
+		printf("* -- CONNEXION -- *\n");
 	}
 
+	/* Demande au client de taper son pseudo */
+	while(resPseudo < 3) {
+		printf("Veuillez entrer un pseudo de taille 3 minimum\n==> ");
+		resPseudo = getMsgTerminal(pseudo, 128);
+	}
+	printf("Votre pseudo est : %s\n", pseudo);
+	envoiMessage(pseudo);
+
+	/* Init du mutex sur fin */
+	pthread_mutex_init(&mutex_fin,0);
+
+	/* Si les deux pairs sont bien connectes, lance la conversation */
+	printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
+
+	conversation();
+
+	printf("\n* -- FIN DE LA CONVERSATION -- *\n");
+
+	/* Ferme la connexion avec le serveur */
+	close(socketClient);
+	
 	/* Ferme le client */
 	fermer();
 	return 0;
