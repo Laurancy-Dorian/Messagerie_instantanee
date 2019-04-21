@@ -29,6 +29,7 @@ char* IP = "127.0.0.1";
 int socketClient; 
 struct sockaddr_in adServ;
 
+
 /* Cette variable assure la communication entre les deux threads */
 int fin;
 pthread_mutex_t mutex_fin;
@@ -163,6 +164,7 @@ void decoThread (int val) {
 }
 
 
+
 /* 	
 *	Fonction *lire 
 *	lis les messages envoyés par l'autre client en boucle.
@@ -210,10 +212,12 @@ void *ecrire() {
 		else {
 			decoThread(0);
 		}
+
 	}
 
 	return NULL;
 }
+
 
 
 /*
@@ -315,7 +319,7 @@ int main (int argc, char *argv[]) {
 
 	/* Ferme la connexion avec le serveur */
 	close(socketClient);
-	
+
 	/* Ferme le client */
 	fermer();
 	return 0;
