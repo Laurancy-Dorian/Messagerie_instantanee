@@ -15,9 +15,11 @@
 #include <unistd.h>
 #include <string.h>
 #include <signal.h>
+#include <pthread.h>
 
 /* Definition de constantes */
 #define PORT 2500
+
 char* IP = "127.0.0.1";
 
 /*	
@@ -28,18 +30,18 @@ int socketClient;
 struct sockaddr_in adServ;
 
 
+/* Cette variable assure la communication entre les deux threads */
+int fin;
+pthread_mutex_t mutex_fin;
+
+
 /* 
 * Ferme le socket et quitte le programme 
 */
 void fermer() {
 	printf("\n* -- FIN -- *\n");
-	int res = close(socketClient);
-	if (res == 0) {
-		printf("\n* -- FERMETURE DU SOCKET -- *\n");
-	} else {
-		perror("\nErreur fermeture du socket\n");
-		exit(-1);
-	}
+	close(socketClient);
+	printf("\n* -- FERMETURE DU SOCKET -- *\n");
 	exit(0);
 }
 
@@ -62,6 +64,23 @@ int envoiMessage (char *msg) {
 	return (int) send(socketClient, msg, strlen(msg)+1, 0);
 }
 
+/*
+*	Enregistre dans msg ce qui est tape dans le terminal
+*	param :		char* 	msg 	Le buffer ou sera enregistre la chaine
+*				int 	taille 	La taille max de ce buffer
+*	return : La taille de la chaine de caracteres lue
+*/
+int getMsgTerminal(char* msg, int taille) {
+	/* Lecture du pseudo */
+	fgets(msg, taille, stdin);
+	char *pos = strchr(msg, '\n');
+	*pos = '\0';
+
+	return strlen(msg);
+}
+
+
+
 /* 
 * 	Demande a l'utilisateur de taper un message et l'envoie au serveur
 *	param :	char*	msg 		Le message envoye sera stocke dans cette variable
@@ -72,10 +91,11 @@ int envoi(char *msg, int taillemsg) {
 	ssize_t envoi;
 
 	/* Lecture du message */
-	printf("==> ");
-	fgets(msg, taillemsg, stdin);
-	char *pos = strchr(msg, '\n');
-	*pos = '\0';
+	int res = getMsgTerminal(msg, taillemsg);
+
+	if (res == -1) {
+		return 0;
+	}
 
 	/* Envoi */
 	envoi = envoiMessage(msg);
@@ -101,6 +121,7 @@ int reception(char *str, int taillestr) {
 		return 0;
 	}
 }
+
 
 /* 
 *	Initialise le serveur
@@ -128,150 +149,109 @@ int connexion() {
 	socklen_t lgA = sizeof(struct sockaddr_in);
 
 	/* Connexion au serveur */
-	int res = connect(socketClient, (struct sockaddr *) &adServ, lgA) ;
-	/* Message de confirmation de connexion */
-	if (res < 0) {
-		return -1;
-	} else {
-		return 0;
-	}
+	return connect(socketClient, (struct sockaddr *) &adServ, lgA) ;
+}
 
+/* 
+* 	Assigne une valeur a la variable globale fin et temine le thread
+*	param : 	int 	val 	La valeur a assigner dans fin
+*/
+void decoThread (int val) {
+	pthread_mutex_lock(&mutex_fin);
+	fin = val;
+	pthread_mutex_unlock(&mutex_fin);
+	pthread_exit(0);
 }
 
 
-/*
-*	Attend que le serveur confirme que l'autre client s'est bien connecte.
-*	Cette fonction retournera l'ordre de parole de la conversation
-*	return : 0 si ce client parlera en premier
-*			 1 si ce client parlera en deuxieme
-*			 -1 si erreur ou si le client distant s'est deconnecte 
+
+/* 	
+*	Fonction *lire 
+*	lis les messages envoyés par l'autre client en boucle.
+*	Si la lecture echoue ou que le message reçu est FIN, ferme le thread et met la variable globale fin à 1.
 */
-int attente() {
-	char str[10];
-	int ordre;
-
-	/* reception du message */
-	ssize_t res = reception(str, 10);
-	
-	/* Si erreur */
-	if (res < 0) {
-		envoiMessage("KO");
-		return -1;
-	} else {
-
-
-		/* Analyse du message, envoi KO si ce message n'est ni NUM1 ni NUM2 */
-		if (strcmp(str, "NUM1") == 0) {
-			ordre = 0;
-		}
-		else if (strcmp(str, "NUM2") == 0) {
-			ordre = 1;
-		}
-		else {
-			envoiMessage("KO");
-			return -1;
-		}
-
-		/* Envoie la confirmation au serveur */
-		envoiMessage("OK");
-
-
-		/* Attend que le serveur lance la conversation ou non*/
-		res = reception(str, 10);
-		if (strcmp(str, "BEGIN") == 0) {
-			return ordre;
-		}
-		else {
-			return -1;
-		}
-
-	}
-
-}
-
-/*
-*	Conversation entre les deux pairs. En fonction de l'ordre, le client va recevoir puis envoyer un message ou 
-*	envoyer puis recevoir un message. La conversation s'arrete si le client recoit ou envoie "FIN"
-*	param:	int 	ordre		l'ordre de parole de la conversation  :
-*								- 0 : Le cient parle en premier
-*								- 1 : Le client parle en deuxieme
-*	return:	0 si ce client termine la conversation, 1 si le client distant termine la conversation	
-*/
-int conversation(int ordre) {
+void *lire() {
 	char msg[256];
 	int res = 0;
-	while(1){
-		/* Si le client parle en premier */
-		if (ordre == 0){
-			/* Envoie le message. Si la chaine est "FIN", ou si l'envoi echoue, 
-			*  retourne 0 (ce client quittera la conversation) */
-			res = envoi(msg, 256);
-			if (res == 0) {
-				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
-					return 0;
-				}
-			}
-			else {
-				return 0;
-			}
 
-			/* Recoit un message et l'affiche. Si la chaine est fin ou si la reception echoue, 
-			*  retourne 1 (le client distant quittera la conversation) */
-			res = reception(msg, 256);
-			if (res == 0){
-				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
-					return 1;
-				}
-				else{
-					printf("~~~~~> %s\n", msg);
-				}
-			}
-			else {
-				return 1;
-			}
-
-		/* Si le client parle en deuxieme */
-		} else {
-
-			/* Recoit un message et l'affiche. Si la chaine est fin ou si la reception echoue, 
-			*  retourne 1 (le client distant quittera la conversation) */
-			res = reception(msg, 256);
-			if (res == 0){
-				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
-					return 1;
-				}
-				else{
-					printf("~~~~~> %s\n", msg);
-				}
+	while (fin < 0) {
+		res = reception(msg, 256);
+		if (res == 0){
+			if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
+				decoThread(1);
 			}
 			else{
-				return 1;
-			}
-
-
-			/* Envoie le message. Si la chaine est "FIN", ou si l'envoi echoue, 
-			*  retourne 0 (ce client quittera la conversation) */
-			res = envoi(msg, 256);
-			if (res == 0) {
-				if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
-					return 0;
-				}
-			}
-			else {
-				return 0;
+				printf("%s\n", msg);
 			}
 		}
+		else {
+			decoThread(1);
+		}
 	}
+	return NULL;
+}
+
+/* 	
+*	Fonction ecrire
+*	Envoie les messages du client en boucle.
+*	Si l'envoi echoue : ferme le thread et met la variable globale fin à 0.
+*/
+void *ecrire() {
+	char msg[256];
+	int res = 0;
+
+	while(fin < 0){
+		/* Envoie le message. Si la chaine est "FIN", ou si l'envoi echoue, deconnecte */
+		
+		res = envoi(msg, 256);
+		if (res == 0) {
+			if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
+				decoThread(0);
+			}
+		}
+		else {
+			decoThread(0);
+		}
+
+	}
+
+	return NULL;
+}
+
+
+
+/*
+*	Conversation entre les deux pairs. 
+*	Création de 2 threads :
+*		-un thread lecture qui utilise la fonction lire (qui reçoit le message et l'affiche).
+*		-un thread ecriturte qui utilise la fonction ecrire (qui envoie le message).
+*	return:	0 si ce client termine la conversation, 1 si le client distant termine la conversation	
+*/
+int conversation() {
+	fin = -1;
+
+	//creation des 2 threads 
+	pthread_t lecture;
+	pthread_t ecriture;
+	pthread_create(&lecture, 0, lire, 0);
+	pthread_create(&ecriture, 0, ecrire, 0);
+
+	pthread_join(lecture, NULL);
+	pthread_join(ecriture, NULL);
+
+	return fin;
 }
 
 /*
-*	./client [PORT] [IP]
+*	./client [PORT "IP" Pseudo]
+*
+*	Exemple : ./client 2051 "192.168.1.100" Toto
 */
 int main (int argc, char *argv[]) {
 	/* Ferme proprement le socket si CTRL+C est execute */
 	signal(SIGINT, fermer);
 
-
+	/* --- RECCUPERATION DES PARAMETRES --- */
 	/* Reccupere le port passe en argument, si aucun port n'est renseigne, le port est la constante PORT */
 	int port;
 	char ip[50];
@@ -288,42 +268,57 @@ int main (int argc, char *argv[]) {
 		strcpy (ip, IP);
 	}
 
+	/* Reccupere le pseudo passe en parametre*/
+	char pseudo[128];
+	int resPseudo = 0;
+	if (argc >= 4) {
+		strcpy (pseudo, argv[3]);
+		resPseudo = strlen(pseudo);
+	} 
+	
 
-	int retourConv = 1;
+	/* --- SECTION PRINCIPALE --- */
+	/* INITIALISATION */
+	initialitation(ip, port);
 
-	/* Le client se reconnectera a la fin de chaque conversation si ce n'est pas lui qui a termine la conversation precedente */
-	while (retourConv > 0) {
-		retourConv = 1;
+	/* CONNEXION AU SERVEUR */
+	int resConnexion = connexion();
+	if (resConnexion < 0) {
+		erreur("Erreur de connexion au serveur");
+	}
+	else {
+		printf("* -- CONNEXION -- *\n");
+	}
 
-		/* INITIALISATION */
-		initialitation(ip, port);
+	/* Demande au client de taper son pseudo */
+	while(resPseudo < 3) {
+		printf("Veuillez entrer un pseudo de taille 3 minimum\n==> ");
+		resPseudo = getMsgTerminal(pseudo, 128);
+	}
+	printf("Votre pseudo est : %s\n", pseudo);
+	envoiMessage(pseudo);
 
-		/* CONNEXION AU SERVEUR */
-		int resConnexion = connexion();
-		if (resConnexion < 0) {
-			erreur("Erreur de connexion au serveur");
-		}
-		else {
-			printf("* -- CONNEXION -- *\n");
-		}
+	/* Attend le message "BEGIN" du serveur. Si le client attend longtemps ici, cela veut dire qu'il n'y a plus de
+	*  place dans la conversation. Le client sera alors connecte lorsqu'un autre client quittera 
+	*/
+	printf("Veuillez patienter, vous etes en file d'attente...\n");
+	char str[128];
+	int resDebut = reception(str, 128);
+	if (resDebut == 0 && strlen(str) == 5 && strncmp("BEGIN", str, 5) == 0) {
 
-		/* Attend que l'autre client soit connecte */
-		printf("* -- ATTENTE DE L'AUTRE CLIENT -- *\n");
-		int ordre = attente();
-
+		/* Init du mutex sur fin */
+		pthread_mutex_init(&mutex_fin,0);
 
 		/* Si les deux pairs sont bien connectes, lance la conversation */
-		if (ordre >= 0) {
-			printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
+		printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
 
-			retourConv = conversation(ordre);
+		conversation();
 
-			printf("\n* -- FIN DE LA CONVERSATION -- *\n");
-		}
-
-		/* Ferme la connexion avec le serveur */
-		close(socketClient);
+		printf("\n* -- FIN DE LA CONVERSATION -- *\n");
 	}
+
+	/* Ferme la connexion avec le serveur */
+	close(socketClient);
 
 	/* Ferme le client */
 	fermer();
