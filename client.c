@@ -19,6 +19,8 @@
 
 /* Definition de constantes */
 #define PORT 2500
+#define TAILLE_BUFFER 2048
+
 
 char* IP = "127.0.0.1";
 
@@ -29,11 +31,33 @@ char* IP = "127.0.0.1";
 int socketClient; 
 struct sockaddr_in adServ;
 
+/* Dernier message recu */
+char lastMsg[TAILLE_BUFFER];
 
 /* Cette variable assure la communication entre les deux threads */
 int fin;
 pthread_mutex_t mutex_fin;
+pthread_mutex_t mutex_lastMsg;
 
+
+
+/* Declaration des fonctions */
+void fermer();
+void erreur(char *erreur);
+int envoiMessage (char *msg);
+int getMsgTerminal(char* msg, int taille);
+int envoi(char *msg, int taillemsg);
+int reception(char *str, int taillestr);
+void initialitation(char *ip, int port);
+int connexion();
+void decoThread (int val);
+void *lire();
+void *ecrire();
+int conversation();
+int envoiUDP(int socket, char* msg, struct sockaddr *donneesReceveur);
+int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr *donneesEnvoyeur);
+void *envoiFichier();
+void *receptionFichier();
 
 /* 
 * Ferme le socket et quitte le programme 
@@ -55,9 +79,35 @@ void erreur(char *erreur) {
 }
 
 /*
+*	Envoie le message au tiers (UDP)
+*	param : int 				socket 				Le socket 
+*			char*				msg 				Le message a envoyer
+*			(struct sockaddr*) 	donneesReceveur		Les donnees du tiers (IP, port ...)
+*	return : si reussi, renvoit le nombre de caractères emis. 
+*			 echec, renvoit -1 et errno contient le code d'erreur.  
+*/
+int envoiUDP(int socket, char* msg, struct sockaddr *donneesReceveur) {
+	return (int) sendto(socket, msg, strlen(msg)+1, 0, (struct sockaddr*) &donneesReceveur, sizeof(struct sockaddr_in));
+}
+
+/* 
+*	Recois un message du tiers
+*	param : int 				socket 				Le socket 
+*			char*				msg 				Le message a envoyer
+*			int 				tailleMsg 			La taille max dans msg
+*			(struct sockaddr*) 	donneesEnvoyeur		Les donnees du tiers (IP, port ...)
+*	return : si reussi, renvoit le nombre de caractères recus. 
+*			 echec, renvoit -1 et errno contient le code d'erreur.  
+*/
+int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr *donneesEnvoyeur) {
+	socklen_t lgA = sizeof(struct sockaddr_in);
+	return (int) recvfrom (socket, msg, tailleMsg, 0, (struct sockaddr*) &donneesEnvoyeur, &lgA);
+}
+
+/*
 *	Envoie le message au serveur
 *	param : char*	msg 	Le message a envoyer
-*	return : si reussi, renvoit le nombre de caractères émis. 
+*	return : si reussi, renvoit le nombre de caractères emis. 
 *			 echec, renvoit -1 et errno contient le code d'erreur.  
 */
 int envoiMessage (char *msg) {
@@ -122,6 +172,55 @@ int reception(char *str, int taillestr) {
 	}
 }
 
+void *envoiFichier() {
+	int res = -1;
+	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
+	int port;
+
+	/* Reception du message contenant l'IP du correspondant */
+	pthread_mutex_lock(&mutex_lastMsg);
+	char* ip = &lastMsg[6]; // Recupere l'ip
+
+	/* Donnees de l'envoyeur */
+	struct sockaddr_in ad;
+	ad.sin_family = AF_INET;	/* IPV4 */
+	ad.sin_addr.s_addr = inet_pton(AF_INET, ip, &(ad.sin_addr));
+
+	while (res == -1) {
+		port = 10000 + (rand() % 15000); // Random entre 10 000 et 25 000
+		ad.sin_port = htons(port);	/* Port */
+		res = bind (socUDP, (struct sockaddr*) &ad, sizeof(ad));
+	}
+
+
+	/* Envoie le port au serveur */
+	char str[TAILLE_BUFFER];
+	sprintf(str, "%d", port);
+	envoiMessage(str);
+
+
+	/* Reception du message contenant le port du correspondant */
+	pthread_mutex_lock(&mutex_lastMsg);
+	char* port_distant = &lastMsg[6]; // Recupere le port
+
+	/* Donnees du receveur */
+	struct sockaddr_in adRec;
+	adRec.sin_family = AF_INET;	/* IPV4 */
+	adRec.sin_addr.s_addr = inet_pton(AF_INET, ip, &(ad.sin_addr));
+	adRec.sin_port = atoi(port_distant);
+
+	/* Selection du fichier */
+	// TODO
+
+	return NULL;
+}
+
+// TODO
+void *receptionFichier() {
+	return NULL;
+
+}
+
 
 /* 
 *	Initialise le serveur
@@ -163,7 +262,22 @@ void decoThread (int val) {
 	pthread_exit(0);
 }
 
+int commande (char* msg) {
+	if (strlen(msg) == 3 && strncmp("/fin", msg, 3) == 0){
+		decoThread(0);
+	} else if (strcmp("/FILESEND", msg) <= 0) {
+		pthread_t sendFile;
+		pthread_create(&sendFile, 0, envoiFichier, 0);
 
+	} else if (strcmp("/FILERECV", msg) <= 0) {
+		pthread_t recvFile;
+		pthread_create(&recvFile, 0, receptionFichier, 0);
+	} else {
+		strcpy(lastMsg, msg);
+		pthread_mutex_unlock(&mutex_lastMsg);
+	}
+	return 0;
+}
 
 /* 	
 *	Fonction *lire 
@@ -177,9 +291,11 @@ void *lire() {
 	while (fin < 0) {
 		res = reception(msg, 256);
 		if (res == 0){
-			if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0) {
-				decoThread(1);
+
+			if (strncmp ("/", msg, 1) == 0) {
+				commande(msg);
 			}
+
 			else{
 				printf("%s\n", msg);
 			}
@@ -190,6 +306,8 @@ void *lire() {
 	}
 	return NULL;
 }
+
+
 
 /* 	
 *	Fonction ecrire
@@ -205,8 +323,8 @@ void *ecrire() {
 		
 		res = envoi(msg, 256);
 		if (res == 0) {
-			if (strlen(msg) == 3 && strncmp("FIN", msg, 3) == 0){
-				decoThread(0);
+			if (strncmp ("/", msg, 1) == 0) {
+				commande(msg);
 			}
 		}
 		else {
@@ -308,6 +426,8 @@ int main (int argc, char *argv[]) {
 
 		/* Init du mutex sur fin */
 		pthread_mutex_init(&mutex_fin,0);
+		pthread_mutex_init(&mutex_lastMsg, 0);
+		pthread_mutex_lock(&mutex_lastMsg);
 
 		/* Si les deux pairs sont bien connectes, lance la conversation */
 		printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");
