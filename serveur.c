@@ -23,9 +23,10 @@
 
 /* Definition de constantes */
 #define PORT 2500
-#define NB_MAX_CLIENTS 2
+#define NB_MAX_CLIENTS 15
 #define TAILLE_BUFFER 2048
 #define TAILLE_PSEUDO 128
+#define NB_COMMANDES 5
 
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
@@ -42,13 +43,62 @@ struct sockaddr_in adClient[NB_MAX_CLIENTS];
 
 socklen_t lgA = sizeof(struct sockaddr_in);	
 
+/** Mutex **/
 /* Mutex pour le numero du client dans le tableau : Cette valeur tres importante pour le thread du client 
 * (position dans le tableau des sockets) etait remplacee avant d'arriver dans le thread, ce mutex resoud le probleme */
 pthread_mutex_t mutex_numClient;
 
+/** Semaphores **/
 /* Ce semaphore permet de ne plus accepter de nouveaux clients lorsqu'il y a autant de clients que NB_MAX_CLIENTS */
 sem_t semaphore_nb_clients; 
 
+/* Structure contenant les commandes */
+typedef struct st_cmd {
+	char* cmd;		// La chaine de caracteres representant la commande
+	void *fonction;	// Le pointeur vers la fonction associee a la commande
+} st_cmd;
+
+
+
+
+/* Declaration des fonctions */
+void *help(int numSocket);
+void *fin(int numSocket);
+void *file(int numSocket);
+void *friends(int numSocket);
+int initialisation (int port);
+int attenteConnexion(int* socClient, struct sockaddr_in *donneesClient);
+int envoi (int socClient, char* msg);
+int reception (int socClient, char* msg, int taille);
+int broadcast(int numClient, char* msg);
+void deconnecterSocket(int numSocket);
+void fermer();
+int envoi_reception (int numSocEnvoyeur);
+void *conversation (int* numcli);
+void ipServeur(char* ip);
+
+/* Liste des commandes */
+st_cmd commandes[5] = {
+	{"/", help},
+	{"/help", help},
+	{"/fin", fin},
+	{"/file", file},
+	{"/friends", friends}
+};
+
+void *help(int numSocket) {
+	char str[TAILLE_BUFFER] = "Voici la liste des commandes : \n";
+
+	int i;
+	for (i = 0; i < NB_COMMANDES; i++) {
+		strcat(str, commandes[i].cmd);
+		strcat(str, "\n");
+	}
+
+	envoi(socketClients[numSocket], str);
+}
+
+// TODO fin, file, friends
 
 /*
 *	Initialise le serveur : prepare le socket, bind et listen
@@ -216,6 +266,25 @@ void fermer() {
 
 
 /*
+*	Effectue la commande pour ce client
+*	param : char* 	str 	 			La commande a effectuer
+*			int 	numSocEnvoyeur		Le NUMERO du client envoyeur dans le tableau des sockets (pas le descripteur)
+*	return : 
+*			 -1 si erreur
+*			 0 si ok
+*/
+int commande(char* str, int numSocEnvoyeur) {
+	int i;
+	for (i = 0; i < NB_COMMANDES; i++) {
+		if (strcmp(commandes[i].cmd, str) <= 0) {
+			commandes[i].fonction(numSocEnvoyeur); // TODO DEBUG
+		} else {
+			help(numSocEnvoyeur);
+		}
+	}
+}
+
+/*
 *	Transmet un message du client a tous les autres clients
 *	Si ce client envoie fin ou se deconnecte, la fonction retourne directement -1
 *	param : int 	numSocEnvoyeur		Le NUMERO du client envoyeur dans le tableau des sockets (pas le descripteur)
@@ -238,21 +307,27 @@ int envoi_reception (int numSocEnvoyeur) {
 	/* Erreur lors de la reception */
 	if (res < 0) {
 		return -1;
-	} else if (res == 0 || (strlen(str) == 3 && strncmp ("FIN", str, 3) == 0)) { /* Le client s'est deconnecte */
-		return 1;
+	// } else if (res == 0 || (strlen(str) == 3 && strncmp ("FIN", str, 3) == 0)) { /* Le client s'est deconnecte */
+	// 	return 1;
+	} else if (res == 0) {
+		strcpy(str, "/fin");
 	}
 
-	/* Ajout du pseudo dans le message avant de l'envoyer aux autres clients "[pseudo] message" */
-	char msgClient[strlen(pseudoClients[numSocEnvoyeur]) + strlen(str) + 4]; /* (+4) pour les 4 caracteres en plus ([] \0 ' ')*/
-	strcpy(msgClient, "[");
-	strcat(msgClient, pseudoClients[numSocEnvoyeur]);
-	strcat(msgClient, "] ");
-	strcat(msgClient, str);
+	if (strncmp ("/", str, 1) == 0) {
+		commande(str, numSocEnvoyeur);
+	} else {
+		/* Ajout du pseudo dans le message avant de l'envoyer aux autres clients "[pseudo] message" */
+		char msgClient[strlen(pseudoClients[numSocEnvoyeur]) + strlen(str) + 4]; /* (+4) pour les 4 caracteres en plus ([] \0 ' ')*/
+		strcpy(msgClient, "[");
+		strcat(msgClient, pseudoClients[numSocEnvoyeur]);
+		strcat(msgClient, "] ");
+		strcat(msgClient, str);
 
 
-	/* ---- ENVOI ---- */
-	/* Envoie le message aux autres clients */
-	broadcast(numSocEnvoyeur, msgClient);
+		/* ---- ENVOI ---- */
+		/* Envoie le message aux autres clients */
+		broadcast(numSocEnvoyeur, msgClient);
+	}
 
 	return 0;
 
