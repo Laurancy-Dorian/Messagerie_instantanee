@@ -1,6 +1,6 @@
 /************************************************
 *												*
-* 	MESSAGERIE INSTANTANEE - SERVEUR - V1.1		*
+* 	MESSAGERIE INSTANTANEE - SERVEUR - V3		*
 *												*
 *	AUTEURS : CABARET Emma - LAURANCY Dorian	*
 *												*
