@@ -16,11 +16,13 @@
 #include <string.h>
 #include <signal.h>
 #include <pthread.h>
+#include <dirent.h>
 
 /* Definition de constantes */
 #define PORT 2500
 #define TAILLE_BUFFER 2048
-
+#define TRUE 1
+#define FALSE 0
 
 char* IP = "127.0.0.1";
 
@@ -31,13 +33,13 @@ char* IP = "127.0.0.1";
 int socketClient; 
 struct sockaddr_in adServ;
 
-/* Dernier message recu */
-char lastMsg[TAILLE_BUFFER];
+/* Derniere commande recue */
+char lastCmd[TAILLE_BUFFER];
 
 /* Cette variable assure la communication entre les deux threads */
 int fin;
 pthread_mutex_t mutex_fin;
-pthread_mutex_t mutex_lastMsg;
+pthread_mutex_t mutex_lastCmd;
 
 
 
@@ -54,8 +56,8 @@ void decoThread (int val);
 void *lire();
 void *ecrire();
 int conversation();
-int envoiUDP(int socket, char* msg, struct sockaddr *donneesReceveur);
-int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr *donneesEnvoyeur);
+int envoiUDP(int socket, char* msg, struct sockaddr_in *donneesReceveur);
+int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr_in *donneesEnvoyeur);
 void *envoiFichier();
 void *receptionFichier();
 
@@ -65,6 +67,8 @@ void *receptionFichier();
 void fermer() {
 	printf("\n* -- FIN -- *\n");
 	close(socketClient);
+	pthread_mutex_destroy(&mutex_fin);
+	pthread_mutex_destroy(&mutex_lastCmd);
 	printf("\n* -- FERMETURE DU SOCKET -- *\n");
 	exit(0);
 }
@@ -86,7 +90,7 @@ void erreur(char *erreur) {
 *	return : si reussi, renvoit le nombre de caractères emis. 
 *			 echec, renvoit -1 et errno contient le code d'erreur.  
 */
-int envoiUDP(int socket, char* msg, struct sockaddr *donneesReceveur) {
+int envoiUDP(int socket, char* msg, struct sockaddr_in *donneesReceveur) {
 	return (int) sendto(socket, msg, strlen(msg)+1, 0, (struct sockaddr*) &donneesReceveur, sizeof(struct sockaddr_in));
 }
 
@@ -99,7 +103,7 @@ int envoiUDP(int socket, char* msg, struct sockaddr *donneesReceveur) {
 *	return : si reussi, renvoit le nombre de caractères recus. 
 *			 echec, renvoit -1 et errno contient le code d'erreur.  
 */
-int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr *donneesEnvoyeur) {
+int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr_in *donneesEnvoyeur) {
 	socklen_t lgA = sizeof(struct sockaddr_in);
 	return (int) recvfrom (socket, msg, tailleMsg, 0, (struct sockaddr*) &donneesEnvoyeur, &lgA);
 }
@@ -172,53 +176,136 @@ int reception(char *str, int taillestr) {
 	}
 }
 
-void *envoiFichier() {
+void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) {
 	int res = -1;
-	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
 	int port;
+	struct sockaddr_in donneesLocal;
+
+
+	/* Parametre un timeout de 2 secondes si pas de reponse */
+	struct timeval tv;
+	tv.tv_sec = 2;
+	tv.tv_usec = 0;
+	setsockopt(socUDP, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
 	/* Reception du message contenant l'IP du correspondant */
-	pthread_mutex_lock(&mutex_lastMsg);
-	char* ip = &lastMsg[6]; // Recupere l'ip
+	pthread_mutex_lock(&mutex_lastCmd);
+	char* ipCorrespondant = &lastCmd[6]; // Recupere l'ip du correspondant
 
 	/* Donnees de l'envoyeur */
-	struct sockaddr_in ad;
-	ad.sin_family = AF_INET;	/* IPV4 */
-	ad.sin_addr.s_addr = inet_pton(AF_INET, ip, &(ad.sin_addr));
+	donneesLocal.sin_family = AF_INET;	/* IPV4 */
+	donneesLocal.sin_addr.s_addr = INADDR_ANY;
 
 	while (res == -1) {
-		port = 10000 + (rand() % 15000); // Random entre 10 000 et 25 000
-		ad.sin_port = htons(port);	/* Port */
-		res = bind (socUDP, (struct sockaddr*) &ad, sizeof(ad));
+		port = 10000 + (rand() % 15000); // Le port sera un random entre 10 000 et 25 000
+		donneesLocal.sin_port = htons(port);	/* Port */
+		res = bind (socUDP, (struct sockaddr*) &donneesLocal, sizeof(donneesLocal));
 	}
-
 
 	/* Envoie le port au serveur */
 	char str[TAILLE_BUFFER];
-	sprintf(str, "%d", port);
+	sprintf(str, "/FILEPORT %d", port);
 	envoiMessage(str);
 
-
 	/* Reception du message contenant le port du correspondant */
-	pthread_mutex_lock(&mutex_lastMsg);
-	char* port_distant = &lastMsg[6]; // Recupere le port
+	pthread_mutex_lock(&mutex_lastCmd);
+	char port_distant[25];
+	strcpy(port_distant, &lastCmd[6]); // Recupere le port
 
-	/* Donnees du receveur */
-	struct sockaddr_in adRec;
-	adRec.sin_family = AF_INET;	/* IPV4 */
-	adRec.sin_addr.s_addr = inet_pton(AF_INET, ip, &(ad.sin_addr));
-	adRec.sin_port = atoi(port_distant);
+	/* Donnees du Correspondant */
+	(*donneesCorrespondant).sin_family = AF_INET;	/* IPV4 */
+	inet_pton(AF_INET, ipCorrespondant, &((*donneesCorrespondant).sin_addr));
+	(*donneesCorrespondant).sin_port = htons(atoi(port_distant));
+
+
+
+}
+
+void *envoiFichier() {
+	
+	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
+	struct sockaddr_in adCorrespondant;
+
+	initTransfertFichier(socUDP, &adCorrespondant);
 
 	/* Selection du fichier */
-	// TODO
+	int fileSelected = FALSE;
+	FILE *fichier;
+	char fileName[TAILLE_BUFFER];
+	while (fileSelected == FALSE) {
+		/* Affiche la liste des fichiers */
+		DIR *dp;
+		struct dirent *ep;     
+		dp = opendir ("./");
+		if (dp != NULL) {
+			printf("[ENVOI FICHIER] Voilà la liste de fichiers :\n");
+			while ((ep = readdir (dp))) {
+				if(strcmp(ep->d_name,".")!=0 && strcmp(ep->d_name,"..")!=0) {
+					printf("%s\n",ep->d_name);
+				}
+			}    
+			(void) closedir (dp);
+		}else {
+			perror ("Ne peux pas ouvrir le répertoire");
+		}
 
-	return NULL;
+		/* Demande le fichier a envoyer */
+		printf("[ENVOI FICHIER] Indiquer le nom du fichier en tapant \"/FILESELECT nomDuFichier\": \n");
+	  	pthread_mutex_lock(&mutex_lastCmd);
+	  	
+		strcpy(fileName, &lastCmd[12]); // Recupere le nom du fichier tape par l'utilisateur
+
+		fichier = fopen(fileName, "r");
+		if (fichier == NULL){
+			printf("[ENVOI FICHIER] Ce fichier n'existe pas : %s", fileName);
+		} else {
+			fileSelected = TRUE;
+		}
+			
+	}
+
+	int ack = 0;
+	char contenu[TAILLE_BUFFER +1];
+	char retourACK[4] = "\0";
+
+	/* Envoi du nom du fichier */
+	while (atoi(&retourACK[3]) != ack) {
+		sprintf(contenu, "%d%s", ack, fileName);
+		envoiUDP(socUDP, contenu, &adCorrespondant);
+		receptionUDP(socUDP, retourACK, 4, &adCorrespondant); // Message de confirmation de reception du message
+	}
+
+	ack = (ack + 1) % 10;
+
+	/* Lecture et envoi du fichier */
+	// Lire et afficher le contenu du fichier
+	while (fgets(contenu, TAILLE_BUFFER, fichier) != NULL) {
+		/* Envoi du contenu du fichier */
+		while (atoi(&retourACK[3]) != ack) {
+			sprintf(contenu, "%d%s", ack, contenu);
+			envoiUDP(socUDP, contenu, &adCorrespondant);
+			receptionUDP(socUDP, retourACK, 4, &adCorrespondant);
+		}
+		ack = (ack + 1) % 10;
+	}
+
+	envoiUDP(socUDP, "/#FINDUFICHIER", &adCorrespondant);
+
+
+	/* Ferme le fichier */
+	fclose(fichier);
+
+	/* Quitte le thread */
+	pthread_exit(0);
 }
 
 // TODO
 void *receptionFichier() {
-	return NULL;
+	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
+	struct sockaddr_in adCorrespondant;
+	initTransfertFichier(socUDP, &adCorrespondant);
 
+	pthread_exit(0);
 }
 
 
@@ -263,20 +350,22 @@ void decoThread (int val) {
 }
 
 int commande (char* msg) {
-	if (strlen(msg) == 3 && strncmp("/fin", msg, 3) == 0){
+	char *cmd = strtok(msg, " ");
+	if (strlen(msg) == 4 && strncmp("/fin", msg, 4) == 0){
 		decoThread(0);
-	} else if (strcmp("/FILESEND", msg) <= 0) {
+	} else if (strlen(cmd) == strlen("/FILESEND") && strncmp("/FILESEND", cmd, strlen("/FILESEND")) == 0) {
 		pthread_t sendFile;
 		pthread_create(&sendFile, 0, envoiFichier, 0);
 
-	} else if (strcmp("/FILERECV", msg) <= 0) {
+	} else if (strlen(cmd) == strlen("/FILERECV") && strncmp("/FILERECV", cmd, strlen("/FILERECV")) == 0) {		
 		pthread_t recvFile;
 		pthread_create(&recvFile, 0, receptionFichier, 0);
 	} else {
-		strcpy(lastMsg, msg);
-		pthread_mutex_unlock(&mutex_lastMsg);
+		strcpy(lastCmd, msg);
+		pthread_mutex_unlock(&mutex_lastCmd);
 	}
 	return 0;
+
 }
 
 /* 	
@@ -426,8 +515,8 @@ int main (int argc, char *argv[]) {
 
 		/* Init du mutex sur fin */
 		pthread_mutex_init(&mutex_fin,0);
-		pthread_mutex_init(&mutex_lastMsg, 0);
-		pthread_mutex_lock(&mutex_lastMsg);
+		pthread_mutex_init(&mutex_lastCmd, 0);
+		pthread_mutex_lock(&mutex_lastCmd);
 
 		/* Si les deux pairs sont bien connectes, lance la conversation */
 		printf("\n* -- DEBUT DE LA CONVERSATION -- *\n");

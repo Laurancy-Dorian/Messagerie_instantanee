@@ -110,6 +110,10 @@ void fin (int numSocket) {
 
 	/* Deconnecte et quitte le thread */
 	deconnecterSocket (numSocket);
+
+	pthread_mutex_lock(&mutexCmd[numSocket]);
+	lastCmd[numSocket][0] = '\0';
+
 	pthread_exit(0);
 }
 
@@ -118,17 +122,17 @@ void fin (int numSocket) {
 *	param : 	int 	numSocket	Le numero dans le tableau des sockets du client qui effectue cette commande
 */ 
 void help (int numSocket) {
-	envoi(socketClients[numSocket], "[MSG SERVEUR]");
-	char str[TAILLE_BUFFER] = "Voici la liste des commandes : \n";
+	char str[TAILLE_BUFFER] = "\n[MSG SERVEUR] Voici la liste des commandes : \n";
 
 	int i;
-	for (i = 0; i < NB_COMMANDES; i++) {
+	for (i = 0; i < NB_COMMANDES-1; i++) {
 		strcat(str, commandes[i].cmd);
 		strcat(str, "\n");
 	}
+	strcat (str, "[END MSG SERVEUR]\n");
 
 	envoi(socketClients[numSocket], str);
-	envoi(socketClients[numSocket], "[END MSG SERVEUR]");
+	pthread_mutex_lock(&mutexCmd[numSocket]);
 	lastCmd[numSocket][0] = '\0';
 }
 
@@ -138,8 +142,7 @@ void help (int numSocket) {
 *	param : 	int 	numSocket	Le numero dans le tableau des sockets du client qui effectue cette commande
 */ 
 void friends (int numSocket) {
-	envoi(socketClients[numSocket], "[MSG SERVEUR]");
-	char str[TAILLE_BUFFER] = "Voici la liste des amis : \n";
+	char str[TAILLE_BUFFER] = "\n[MSG SERVEUR] Voici la liste des amis :\n";
 
 	int i;
 	for (i = 0; i < NB_MAX_CLIENTS; i++) {
@@ -148,9 +151,10 @@ void friends (int numSocket) {
 			strcat(str, "\n");
 		}
 	}
+	strcat (str, "[END MSG SERVEUR]\n");
 
 	envoi(socketClients[numSocket], str);
-	envoi(socketClients[numSocket], "[END MSG SERVEUR]");
+	pthread_mutex_lock(&mutexCmd[numSocket]);
 	lastCmd[numSocket][0] = '\0';
 
 }
@@ -202,12 +206,21 @@ void file_traitements(int* numSoc) {
 
 	/* Initie le lancement du transfert de fichier */
 
-	/* Envoie /FILESEND au client envoyeur */
-	char str[TAILLE_BUFFER] = "/FILESEND";
+	/* Reccuperation des IP */
+	char ipEnvoyeur[50];
+	inet_ntop (AF_INET, &(adClient[numSocket].sin_addr), ipEnvoyeur, INET_ADDRSTRLEN);	
+
+	char ipReceveur[50];
+	inet_ntop (AF_INET, &(adClient[numReceveur].sin_addr), ipReceveur, INET_ADDRSTRLEN);	
+
+	/* Envoie /FILESEND [IP] au client envoyeur */
+	char str[TAILLE_BUFFER] = "/FILESEND ";
+	strcat(str, ipReceveur);
 	envoi(socketClients[numSocket], str);
 
-	/* Envoie /FILERECV au client recepteur */
+	/* Envoie /FILERECV [IP] au client recepteur */
 	strcpy(str, "/FILERECV ");
+	strcat(str, ipEnvoyeur);
 	envoi(socketClients[numReceveur], str);
 
 	/* Attend la reponse des deux clients */
@@ -236,29 +249,19 @@ void file_traitements(int* numSoc) {
 	char* portReceveur = strtok(cmdEnvoyeur, " ");
 	portReceveur = strtok(NULL, " ");
 
-
-	/* Reccuperation des IP */
-	char ipEnvoyeur[50];
-	inet_ntop (AF_INET, &(adClient[numSocket].sin_addr), ipEnvoyeur, INET_ADDRSTRLEN);	
-
-	char ipReceveur[50];
-	inet_ntop (AF_INET, &(adClient[numReceveur].sin_addr), ipReceveur, INET_ADDRSTRLEN);	
-
+	
 	/* Envoi du message a l'envoyeur */
 	strcpy (str, "/FILE ");
-	strcat (str, ipReceveur);
-	strcat (str, " ");
 	strcat (str, portReceveur);
 	envoi(socketClients[numSocket], str);
 
 	/* Envoi du message au recepteur */
 	strcpy (str, "/FILE ");
-	strcat (str, ipEnvoyeur);
-	strcat (str, " ");
 	strcat (str, portEnvoyeur);
 	envoi(socketClients[numReceveur], str);
 
 	/* Les clients ont toutes les informations qu'il faut pour echanger un fichier, ce thread se termine */
+	pthread_mutex_lock(&mutexCmd[numSocket]);
 	lastCmd[numSocket][0] = '\0';
 	pthread_exit(0);
 
@@ -299,7 +302,8 @@ int commande(char* str, int numSocEnvoyeur) {
 	int i = 0;
 	int ok = FALSE;
 	while (i < NB_COMMANDES && ok == FALSE) {
-		if (strcmp(commandes[i].cmd, str) <= 0) {
+		char *cmd = strtok(str, " ");
+		if (strlen(cmd) == strlen(commandes[i].cmd) && strncmp(commandes[i].cmd, cmd, strlen(commandes[i].cmd)) == 0) {
 			void (*f)(int) = commandes[i].fonction;
 			(*f)(numSocEnvoyeur);
 			ok = TRUE;
@@ -441,7 +445,7 @@ void deconnecterSocket(int numSocket) {
 			printf ("Client n°%d %s deconnecte\n\n", i, pseudoClients[i]);
 
 			/* Envoie "FIN" au client pour qu'il se deconnecte de son conte */
-			envoi(socketClients[i], "FIN");
+			envoi(socketClients[i], "/fin");
 			shutdown (socketClients[i], 2);
 			socketClients[i] = -1;
 
@@ -600,10 +604,15 @@ void ipServeur(char* ip) {
 	/* Read the output a line at a time - output it. */
 	fgets(ip, 50, fp);
 	char *pos = strchr(ip, '\n');
+	if (pos == NULL) {
+		pos = &ip[49];
+	}	
 	*pos = '\0';
+
 
 	/* Coupe pour prendre seulement la 1ere ip */
 	ip = strtok(ip, " ");
+
 
 	/* close */
 	pclose(fp);
@@ -645,6 +654,7 @@ int main (int argc, char *argv[]) {
 		printf("IP : %s\nPort : %d\n", ipServ, port);
 	}
 
+
 	/* Initialise le tableau des sockets à -1 : Lorsqu'une case est egale a -1, on peut l'ulitilser pour l'attribuer au prochain client */
 	int i = 0;
 	for (i = 0; i < NB_MAX_CLIENTS; i++) {
@@ -655,6 +665,7 @@ int main (int argc, char *argv[]) {
 	pthread_mutex_init(&mutex_numClient,0);
 	sem_init(&semaphore_nb_clients, 0, NB_MAX_CLIENTS);
 	for (i = 0; i<NB_MAX_CLIENTS; i++) {
+
 		pthread_mutex_init(&mutexCmd[i], 0);
 		pthread_mutex_lock(&mutexCmd[i]);
 	}
