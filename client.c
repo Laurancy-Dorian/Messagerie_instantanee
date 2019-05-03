@@ -6,6 +6,13 @@
 *												*
 ************************************************/
 
+
+/* 
+BUGS CONNUS :
+- Lors de l'envoi d'un fchier, on ne recoit plus les messages (trouver cause)
+*/
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -17,6 +24,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <dirent.h>
+#include <time.h> 
 
 /* Definition de constantes */
 #define PORT 2500
@@ -177,6 +185,7 @@ int reception(char *str, int taillestr) {
 }
 
 void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) {
+	printf("initTransfertFichier\n");
 	int res = -1;
 	int port;
 	struct sockaddr_in donneesLocal;
@@ -190,18 +199,24 @@ void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) 
 
 	/* Reception du message contenant l'IP du correspondant */
 	pthread_mutex_lock(&mutex_lastCmd);
-	char* ipCorrespondant = &lastCmd[6]; // Recupere l'ip du correspondant
+	char ipCorrespondant[strlen(&lastCmd[10])]; // Recupere l'ip du correspondant
+	strcpy (ipCorrespondant, &lastCmd[10]);
+
+	printf("%s\n", &lastCmd[10]);
+	printf("Ip du correspondant %s\n", ipCorrespondant);
 
 	/* Donnees de l'envoyeur */
 	donneesLocal.sin_family = AF_INET;	/* IPV4 */
 	donneesLocal.sin_addr.s_addr = INADDR_ANY;
-
+		
+	srand(time(NULL));
 	while (res == -1) {
 		port = 10000 + (rand() % 15000); // Le port sera un random entre 10 000 et 25 000
 		donneesLocal.sin_port = htons(port);	/* Port */
 		res = bind (socUDP, (struct sockaddr*) &donneesLocal, sizeof(donneesLocal));
 	}
 
+	printf("PORT CHOISI : %d\n", port);
 	/* Envoie le port au serveur */
 	char str[TAILLE_BUFFER];
 	sprintf(str, "/FILEPORT %d", port);
@@ -210,6 +225,7 @@ void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) 
 	/* Reception du message contenant le port du correspondant */
 	pthread_mutex_lock(&mutex_lastCmd);
 	char port_distant[25];
+	printf("%s\n", lastCmd);
 	strcpy(port_distant, &lastCmd[6]); // Recupere le port
 
 	/* Donnees du Correspondant */
@@ -217,12 +233,13 @@ void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) 
 	inet_pton(AF_INET, ipCorrespondant, &((*donneesCorrespondant).sin_addr));
 	(*donneesCorrespondant).sin_port = htons(atoi(port_distant));
 
+	printf("INIT termine. IP : %s, PORT : %s\n", ipCorrespondant, port_distant);
 
 
 }
 
 void *envoiFichier() {
-	
+	printf("\nENVOI FICHIER\n");
 	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
 	struct sockaddr_in adCorrespondant;
 
@@ -264,6 +281,7 @@ void *envoiFichier() {
 			
 	}
 
+	printf("Fichier selectionne, debut du transfert");
 	int ack = 0;
 	char contenu[TAILLE_BUFFER +1];
 	char retourACK[4] = "\0";
@@ -301,9 +319,14 @@ void *envoiFichier() {
 
 // TODO
 void *receptionFichier() {
+	printf("\nRECEPTION FICHIER\n");
+
 	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
 	struct sockaddr_in adCorrespondant;
+
 	initTransfertFichier(socUDP, &adCorrespondant);
+
+	printf("REC FICHIER DEBUT");
 
 	pthread_exit(0);
 }
@@ -350,19 +373,26 @@ void decoThread (int val) {
 }
 
 int commande (char* msg) {
-	char *cmd = strtok(msg, " ");
+	printf("\nCommande : %s\n", msg);
+
+	char message[strlen(msg)];
+	strcpy (message, msg);
+	char *cmd = strtok(message, " ");
+
 	if (strlen(msg) == 4 && strncmp("/fin", msg, 4) == 0){
 		decoThread(0);
-	} else if (strlen(cmd) == strlen("/FILESEND") && strncmp("/FILESEND", cmd, strlen("/FILESEND")) == 0) {
+	} else {
+		strcpy(lastCmd, msg);
+		pthread_mutex_unlock(&mutex_lastCmd);
+	}
+
+	if (strlen(cmd) == strlen("/FILESEND") && strncmp("/FILESEND", cmd, strlen("/FILESEND")) == 0) {
 		pthread_t sendFile;
 		pthread_create(&sendFile, 0, envoiFichier, 0);
 
 	} else if (strlen(cmd) == strlen("/FILERECV") && strncmp("/FILERECV", cmd, strlen("/FILERECV")) == 0) {		
 		pthread_t recvFile;
 		pthread_create(&recvFile, 0, receptionFichier, 0);
-	} else {
-		strcpy(lastCmd, msg);
-		pthread_mutex_unlock(&mutex_lastCmd);
 	}
 	return 0;
 

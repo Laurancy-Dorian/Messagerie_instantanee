@@ -6,6 +6,15 @@
 *												*
 ************************************************/
 
+/* 
+BUGS CONNUS :
+- Lorsqu'un client se connecte sans donner son nom, on attend que l'utilisateur le rentre
+Cependant, si un autre utilisateur se connecte avant que le nom soit rentré, il est directement deco
+
+- Les pseudos identiques sont autorisés
+*/
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -197,6 +206,7 @@ void file_traitements(int* numSoc) {
 		envoi(socketClients[numSocket], "/FILE KO");
 		envoi(socketClients[numSocket], "[MSG SERVEUR] Ce pseudo ne correspond a aucun clients connectes [END MSG SERVEUR]");
 		friends(numSocket);
+		pthread_mutex_lock(&mutexCmd[numSocket]);
 		lastCmd[numSocket][0] = '\0';
 		pthread_exit(0);
 	}
@@ -230,24 +240,27 @@ void file_traitements(int* numSoc) {
 		pthread_mutex_lock(&mutexCmd[numReceveur]);
 
 		/* La commande n'est pas pour ce thread */
-		if (strncmp(lastCmd[numSocket], "/FILEPORT", 9) != 0 || strncmp(lastCmd[numReceveur], "/FILEPORT", 9)) {
+		if (strncmp(lastCmd[numSocket], "/FILEPORT", 9) != 0 || strncmp(lastCmd[numReceveur], "/FILEPORT", 9) != 0) {
 			pthread_mutex_unlock(&mutexCmd[numSocket]);
 			pthread_mutex_unlock(&mutexCmd[numReceveur]);
+
+			printf("PORTS FAUX : %s, %s\n", lastCmd[numSocket], lastCmd[numReceveur]);
 		} else {
 			ok = TRUE;
 		}
 	}
+	printf("PORTS RECUS: %s, %s\n", lastCmd[numSocket], lastCmd[numReceveur]);
 
 	/* On reccupere les ports */
 	char cmdEnvoyeur[TAILLE_BUFFER];
 	strcpy(cmdEnvoyeur, lastCmd[numSocket]);
-	char* portEnvoyeur = strtok(cmdEnvoyeur, " ");
-	portEnvoyeur = strtok(NULL, " ");
+	char* portEnvoyeur = &cmdEnvoyeur[10];
 
 	char cmdReceveur[TAILLE_BUFFER];
 	strcpy(cmdReceveur, lastCmd[numReceveur]);
-	char* portReceveur = strtok(cmdEnvoyeur, " ");
-	portReceveur = strtok(NULL, " ");
+	char* portReceveur = &cmdReceveur[10];
+
+	printf("Ports : %s, %s\n", portEnvoyeur, portReceveur);
 
 	
 	/* Envoi du message a l'envoyeur */
@@ -263,6 +276,7 @@ void file_traitements(int* numSoc) {
 	/* Les clients ont toutes les informations qu'il faut pour echanger un fichier, ce thread se termine */
 	pthread_mutex_lock(&mutexCmd[numSocket]);
 	lastCmd[numSocket][0] = '\0';
+	printf("FIN TRAITEMENT FILE\n");
 	pthread_exit(0);
 
 }
@@ -274,7 +288,6 @@ void file_traitements(int* numSoc) {
 void file (int numSocket) {
 	pthread_t t; 
 	pthread_create(&t, 0, (void*) &file_traitements, &numSocket);
-
 }
 
 
