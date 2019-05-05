@@ -6,13 +6,6 @@
 *												*
 ************************************************/
 
-
-/* 
-BUGS CONNUS :
-- Lors de l'envoi d'un fchier, on ne recoit plus les messages (trouver cause)
-*/
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -31,8 +24,12 @@ BUGS CONNUS :
 #define TAILLE_BUFFER 2048
 #define TRUE 1
 #define FALSE 0
+#define IN 1
+#define OUT 0
 
 char* IP = "127.0.0.1";
+char* DOSSIER_ENVOI_FICHIERS = "./BoiteEnvoi";
+char* DOSSIER_RECEPTION_FICHIERS = "./FichiersRecus";
 
 /*	
 *	Declaration du Socket et de la structure. Ils doivent etre globaux pour que la fonction 
@@ -68,6 +65,8 @@ int envoiUDP(int socket, char* msg, struct sockaddr_in *donneesReceveur);
 int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr_in *donneesEnvoyeur);
 void *envoiFichier();
 void *receptionFichier();
+void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant);
+int commande (char* msg, int in_Out);
 
 /* 
 * Ferme le socket et quitte le programme 
@@ -99,7 +98,8 @@ void erreur(char *erreur) {
 *			 echec, renvoit -1 et errno contient le code d'erreur.  
 */
 int envoiUDP(int socket, char* msg, struct sockaddr_in *donneesReceveur) {
-	return (int) sendto(socket, msg, strlen(msg)+1, 0, (struct sockaddr*) &donneesReceveur, sizeof(struct sockaddr_in));
+	socklen_t lgA = sizeof(struct sockaddr_in);
+	return (int) sendto(socket, msg, strlen(msg)+1, 0, (struct sockaddr*) donneesReceveur, lgA);
 }
 
 /* 
@@ -113,7 +113,7 @@ int envoiUDP(int socket, char* msg, struct sockaddr_in *donneesReceveur) {
 */
 int receptionUDP(int socket, char* msg, int tailleMsg, struct sockaddr_in *donneesEnvoyeur) {
 	socklen_t lgA = sizeof(struct sockaddr_in);
-	return (int) recvfrom (socket, msg, tailleMsg, 0, (struct sockaddr*) &donneesEnvoyeur, &lgA);
+	return (int) recvfrom (socket, msg, tailleMsg, 0, (struct sockaddr*) donneesEnvoyeur, &lgA);
 }
 
 /*
@@ -159,14 +159,17 @@ int envoi(char *msg, int taillemsg) {
 		return 0;
 	}
 
-	/* Envoi */
-	envoi = envoiMessage(msg);
-
-	if (envoi < 0) {
-		return -1;
-	} else {
-		return 0;
+	if (msg[0] != '/') {
+		/* Envoi */
+		envoi = envoiMessage(msg);
+		if (envoi < 0) {
+			return -1;
+		}
 	}
+
+	return 0;
+
+
 }
 
 /* 
@@ -184,8 +187,16 @@ int reception(char *str, int taillestr) {
 	}
 }
 
+/*
+* 	Initialise le socket UDP pour le transfert du fichier avec le client correspondant et remplis la structure passee en parametre
+*	de l'adresse ip et du port du correspondant.
+*	Dans cette fonction, le client va envoye le port sur lequel il est connecte au serveur, et le serveur lui enverra le
+*	port sur lequel son correspondant est connecte.
+*	param :		int 				socUDP					Le socket initialise (PF_INET, SOCK_DGRAM, 0)
+*				struct sockaddr_in	*donneesCorrespondant	La structure ou seront stockees les donnees du correspondant
+*	prereq :	La commande /FILERECV [IP] ou /FILESEND [IP] a ete enregistree dans lastCmd
+*/ 
 void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) {
-	printf("initTransfertFichier\n");
 	int res = -1;
 	int port;
 	struct sockaddr_in donneesLocal;
@@ -202,9 +213,6 @@ void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) 
 	char ipCorrespondant[strlen(&lastCmd[10])]; // Recupere l'ip du correspondant
 	strcpy (ipCorrespondant, &lastCmd[10]);
 
-	printf("%s\n", &lastCmd[10]);
-	printf("Ip du correspondant %s\n", ipCorrespondant);
-
 	/* Donnees de l'envoyeur */
 	donneesLocal.sin_family = AF_INET;	/* IPV4 */
 	donneesLocal.sin_addr.s_addr = INADDR_ANY;
@@ -216,7 +224,6 @@ void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) 
 		res = bind (socUDP, (struct sockaddr*) &donneesLocal, sizeof(donneesLocal));
 	}
 
-	printf("PORT CHOISI : %d\n", port);
 	/* Envoie le port au serveur */
 	char str[TAILLE_BUFFER];
 	sprintf(str, "/FILEPORT %d", port);
@@ -225,35 +232,39 @@ void initTransfertFichier(int socUDP, struct sockaddr_in *donneesCorrespondant) 
 	/* Reception du message contenant le port du correspondant */
 	pthread_mutex_lock(&mutex_lastCmd);
 	char port_distant[25];
-	printf("%s\n", lastCmd);
 	strcpy(port_distant, &lastCmd[6]); // Recupere le port
 
-	/* Donnees du Correspondant */
+	/* Remplis les donnees du Correspondant */
 	(*donneesCorrespondant).sin_family = AF_INET;	/* IPV4 */
 	inet_pton(AF_INET, ipCorrespondant, &((*donneesCorrespondant).sin_addr));
 	(*donneesCorrespondant).sin_port = htons(atoi(port_distant));
 
-	printf("INIT termine. IP : %s, PORT : %s\n", ipCorrespondant, port_distant);
-
-
 }
 
+/*
+*	Fonction d'envoi de fichier.
+*	Demande a l'utilisateur quel fichier il souhaite envoyer, puis le transfert au client correspondant
+*	prereq :	La commande /FILERECV [IP] ou /FILESEND [IP] a ete enregistree dans lastCmd
+*/
 void *envoiFichier() {
-	printf("\nENVOI FICHIER\n");
+	/* Init du socket en UDP */
 	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
 	struct sockaddr_in adCorrespondant;
 
+
+	/* Reccupere les donnees du correspondant */
 	initTransfertFichier(socUDP, &adCorrespondant);
 
-	/* Selection du fichier */
+	/* == Selection du fichier == */
 	int fileSelected = FALSE;
 	FILE *fichier;
 	char fileName[TAILLE_BUFFER];
+	char filepath[TAILLE_BUFFER];
 	while (fileSelected == FALSE) {
 		/* Affiche la liste des fichiers */
 		DIR *dp;
 		struct dirent *ep;     
-		dp = opendir ("./");
+		dp = opendir (DOSSIER_ENVOI_FICHIERS);
 		if (dp != NULL) {
 			printf("[ENVOI FICHIER] Voilà la liste de fichiers :\n");
 			while ((ep = readdir (dp))) {
@@ -269,22 +280,28 @@ void *envoiFichier() {
 		/* Demande le fichier a envoyer */
 		printf("[ENVOI FICHIER] Indiquer le nom du fichier en tapant \"/FILESELECT nomDuFichier\": \n");
 	  	pthread_mutex_lock(&mutex_lastCmd);
-	  	
-		strcpy(fileName, &lastCmd[12]); // Recupere le nom du fichier tape par l'utilisateur
 
-		fichier = fopen(fileName, "r");
+	  	strcpy(fileName, &lastCmd[12]); // Recupere le nom du fichier tape par l'utilisateur
+
+	  	strcpy(filepath, DOSSIER_ENVOI_FICHIERS);
+	  	strcat(filepath, "/");
+	  	strcat(filepath, fileName);		
+
+		fichier = fopen(filepath, "r");
 		if (fichier == NULL){
-			printf("[ENVOI FICHIER] Ce fichier n'existe pas : %s", fileName);
+			printf("[ENVOI FICHIER] Ce fichier n'existe pas : %s\n", fileName);
 		} else {
 			fileSelected = TRUE;
 		}
-			
 	}
 
-	printf("Fichier selectionne, debut du transfert");
+	/* == Envoi du fichier =*/
+
+	printf("\n[ENVOI FICHIER] Envoi du fichier : %s\n", fileName);
 	int ack = 0;
-	char contenu[TAILLE_BUFFER +1];
-	char retourACK[4] = "\0";
+	char contenu[TAILLE_BUFFER];
+	char message[TAILLE_BUFFER + 15];
+	char retourACK[5] = "ACK1";
 
 	/* Envoi du nom du fichier */
 	while (atoi(&retourACK[3]) != ack) {
@@ -300,8 +317,8 @@ void *envoiFichier() {
 	while (fgets(contenu, TAILLE_BUFFER, fichier) != NULL) {
 		/* Envoi du contenu du fichier */
 		while (atoi(&retourACK[3]) != ack) {
-			sprintf(contenu, "%d%s", ack, contenu);
-			envoiUDP(socUDP, contenu, &adCorrespondant);
+			sprintf(message, "%d%s", ack, contenu);
+			envoiUDP(socUDP, message, &adCorrespondant);
 			receptionUDP(socUDP, retourACK, 4, &adCorrespondant);
 		}
 		ack = (ack + 1) % 10;
@@ -310,6 +327,7 @@ void *envoiFichier() {
 	envoiUDP(socUDP, "/#FINDUFICHIER", &adCorrespondant);
 
 
+	printf("[SYSTEME] Le fichier a bien ete envoye\n");
 	/* Ferme le fichier */
 	fclose(fichier);
 
@@ -317,17 +335,67 @@ void *envoiFichier() {
 	pthread_exit(0);
 }
 
-// TODO
-void *receptionFichier() {
-	printf("\nRECEPTION FICHIER\n");
 
+/*
+*	Fonction de reception de fichier.
+*	Recoit un fichier depuis le correspondant et l'enregistre
+*	La commande /FILERECV [IP] ou /FILESEND [IP] a ete enregistree dans lastCmd
+*/
+void *receptionFichier() {
+	/* Init d'un socket en UDP */
 	int socUDP = socket(PF_INET, SOCK_DGRAM, 0);
 	struct sockaddr_in adCorrespondant;
 
+	/* Reccupere les donnees du correspondant */
 	initTransfertFichier(socUDP, &adCorrespondant);
 
-	printf("REC FICHIER DEBUT");
+	int ack = 0;
+	char contenu[TAILLE_BUFFER + 10] = "2";
+	char retourACK[5];
 
+	/* Reception du nom du fichier */
+	while (atoi(&contenu[0]) != ack) {
+		receptionUDP(socUDP, contenu, TAILLE_BUFFER+10, &adCorrespondant); // Message de confirmation de reception du message
+	}
+	sprintf(retourACK, "ACK%d", ack);
+	envoiUDP(socUDP, retourACK, &adCorrespondant);
+	ack = (ack + 1) % 10;
+
+	/* Ouverture du fichier */
+	FILE *fichier;
+
+	char fileName[strlen(&contenu[1]) + strlen(DOSSIER_RECEPTION_FICHIERS) + 1];
+	strcpy(fileName, DOSSIER_RECEPTION_FICHIERS);
+	strcat(fileName, "/");
+	strcat(fileName, &contenu[1]);
+
+	fichier = fopen(fileName, "w+");
+
+	if (fichier == NULL){
+		printf("Erreur dans la creation du fichier %s\n", fileName);
+	} else {
+
+		/* Reception et ecriture du fichier */
+		// Lire et afficher le contenu du fichier
+		while (receptionUDP(socUDP, contenu, TAILLE_BUFFER+1, &adCorrespondant) > 0 && strcmp("/#FINDUFICHIER", contenu) != 0) {
+			if (atoi(&contenu[0]) == ack) {
+				fputs(&contenu[1], fichier);
+				sprintf(retourACK, "ACK%d", ack);
+				envoiUDP(socUDP, retourACK, &adCorrespondant);
+				ack = (ack + 1) % 10;
+			} else {
+				sprintf(retourACK, "ACK%d", (ack-1 %10));
+				envoiUDP(socUDP, retourACK, &adCorrespondant);
+			}
+
+		}
+
+		printf("[SYSTEME] Vous avez recu un fichier : %s\n", fileName);
+	}
+	/* Ferme le fichier */
+	fclose(fichier);
+
+	/* Quitte le thread */
 	pthread_exit(0);
 }
 
@@ -372,21 +440,28 @@ void decoThread (int val) {
 	pthread_exit(0);
 }
 
-int commande (char* msg) {
-	printf("\nCommande : %s\n", msg);
+/*
+*	Analyse et traite ou envoie la commande :
+*		/fin 		Termine la connexion
+*		/FILESEND	Initialise la
+*/
+int commande (char* msg, int in_Out) {
+	strcpy(lastCmd, msg);
+	pthread_mutex_unlock(&mutex_lastCmd);
 
 	char message[strlen(msg)];
 	strcpy (message, msg);
 	char *cmd = strtok(message, " ");
 
-	if (strlen(msg) == 4 && strncmp("/fin", msg, 4) == 0){
-		decoThread(0);
-	} else {
-		strcpy(lastCmd, msg);
-		pthread_mutex_unlock(&mutex_lastCmd);
+	if (in_Out == OUT) {
+		if (strlen(cmd) != strlen("/FILESELECT") && strncmp("/FILESELECT", cmd, strlen("/FILESELECT")) != 0) {
+			envoiMessage(msg);
+		}
 	}
 
-	if (strlen(cmd) == strlen("/FILESEND") && strncmp("/FILESEND", cmd, strlen("/FILESEND")) == 0) {
+	if (strlen(msg) == 4 && strncmp("/fin", msg, 4) == 0){
+		decoThread(0);
+	} else if (strlen(cmd) == strlen("/FILESEND") && strncmp("/FILESEND", cmd, strlen("/FILESEND")) == 0) {
 		pthread_t sendFile;
 		pthread_create(&sendFile, 0, envoiFichier, 0);
 
@@ -394,6 +469,10 @@ int commande (char* msg) {
 		pthread_t recvFile;
 		pthread_create(&recvFile, 0, receptionFichier, 0);
 	}
+
+
+
+
 	return 0;
 
 }
@@ -412,7 +491,7 @@ void *lire() {
 		if (res == 0){
 
 			if (strncmp ("/", msg, 1) == 0) {
-				commande(msg);
+				commande(msg, IN);
 			}
 
 			else{
@@ -443,7 +522,7 @@ void *ecrire() {
 		res = envoi(msg, 256);
 		if (res == 0) {
 			if (strncmp ("/", msg, 1) == 0) {
-				commande(msg);
+				commande(msg, OUT);
 			}
 		}
 		else {
