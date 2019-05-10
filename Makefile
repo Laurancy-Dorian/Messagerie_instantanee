@@ -2,6 +2,9 @@
 #~ définitions
 ########################################
 
+# dossiers
+DIRS=bin obj
+
 # nom de l'executable
 #BIN=runPeriod
 
@@ -28,6 +31,9 @@ bin/serveur: $(SRCServ:%.c=obj/%.o)
 	gcc -o $@ $+ -lpthread 
 
 
-
 clean:
 	rm -f $(BIN) obj/*.o *~
+
+	
+# Cree les dossiers
+$(shell mkdir -p $(DIRS))
