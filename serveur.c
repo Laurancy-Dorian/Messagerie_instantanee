@@ -23,35 +23,61 @@
 
 /* == Definition de constantes == */
 #define PORT 2500
-#define NB_MAX_CLIENTS 15
+#define NB_MAX_CLIENTS 50
 #define TAILLE_BUFFER 2048
 #define TAILLE_PSEUDO 128
+#define NB_MAX_SALONS 10
 #define NB_COMMANDES 5
 #define TRUE 1
 #define FALSE 0
 
+int NB_MAX_CLIENTS_SALONS_DEFAULT = NB_MAX_CLIENTS / NB_MAX_SALONS;
+socklen_t lgA = sizeof(struct sockaddr_in);	
+
+/* === Structures === */
+typedef struct dataSocClients {
+	int socket;		// Le socket du client
+	struct sockaddr_in donneesClient;	// Les donnees (ip, port ...)
+} dataSocClients;
+
+typedef struct client {
+	int id; 	// Position dans le tableau des clients du salon
+	int salon; 	// id du salon
+	dataSocClients dtCli;
+	char* pseudo; // Le pseudo du client (length > 2)
+	pthread_t thread;
+	char* lastCmd;
+	pthread_mutex_t mutexCmd;
+} client;
+
+typedef struct salon {
+	int nbClients;
+	int maxClients;
+	char* nomSalon;
+	pthread_mutex_t mutexSalon;
+	client* tabClients; // Un tableau de client
+} salon;
+
+salon tabSalons[NB_MAX_SALONS];
+
+const salon EmptySalon = {
+	-1, -1, NULL, PTHREAD_MUTEX_INITIALIZER, NULL
+};
 
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
 * 	"fermer" puisse y acceder (car elle peut etre declenchee par un CTRL + C) 
 */
 int socketServeur; 
-int socketClients[NB_MAX_CLIENTS];
-char pseudoClients[NB_MAX_CLIENTS][TAILLE_PSEUDO];
-pthread_t threadClients[NB_MAX_CLIENTS];
-
 
 /* Structures contenant les donnees du serveur et des clients */
 struct sockaddr_in adServ;
-struct sockaddr_in adClient[NB_MAX_CLIENTS]; 
-
-socklen_t lgA = sizeof(struct sockaddr_in);	
 
 
 /* == Mutex == **/
 /* Mutex pour le numero du client dans le tableau : Cette valeur tres importante pour le thread du client 
 * (position dans le tableau des sockets) etait remplacee avant d'arriver dans le thread, ce mutex resoud le probleme */
-pthread_mutex_t mutex_numClient;
+pthread_mutex_t mutex_dataSocClient;
 
 /* == Semaphores == **/
 /* Ce semaphore permet de ne plus accepter de nouveaux clients lorsqu'il y a autant de clients que NB_MAX_CLIENTS */
@@ -66,10 +92,6 @@ typedef struct st_cmd {
 
 /* Commandes lors d'echanges d'informations entre le serveur et le client. L'utilisateur n'est pas cense les utiliser */
 char* commandes_systeme[] = {"/FILESEND", "/FILERECV", "/FILEPORT", "/FILE"};
-
-/* Enregistre la derniere commande de chaque client et protege la lecture par un mutex */
-char lastCmd[NB_MAX_CLIENTS][TAILLE_BUFFER];
-pthread_mutex_t mutexCmd[NB_MAX_CLIENTS];
 
 
 /* == Declaration des fonctions == */
@@ -660,52 +682,51 @@ int main (int argc, char *argv[]) {
 
 	/* Initialise le tableau des sockets à -1 : Lorsqu'une case est egale a -1, on peut l'ulitilser pour l'attribuer au prochain client */
 	int i = 0;
-	for (i = 0; i < NB_MAX_CLIENTS; i++) {
-		socketClients[i] = -1;
+	for (i = 0; i < NB_MAX_SALONS; i++) {
+		tabSalons[i] = EmptySalon;
 	}
+
+	/* Premier Salon */
+	client cl[NB_MAX_CLIENTS_SALONS_DEFAULT];
+	pthread_mutex_t mutexSalon12;
+	pthread_mutex_init(&mutexSalon12,0);
+	tabSalons[0] = (salon) {0, NB_MAX_CLIENTS_SALONS_DEFAULT, "SALON 12", mutexSalon12, cl};
+	/* TODO : Fonction qui cree les salons en passant (nbClientMax, nomSalon) */
 
 	/* Init des mutex et semaphores */
-	pthread_mutex_init(&mutex_numClient,0);
+	pthread_mutex_init(&mutex_dataSocClient,0);
 	sem_init(&semaphore_nb_clients, 0, NB_MAX_CLIENTS);
-	for (i = 0; i<NB_MAX_CLIENTS; i++) {
 
-		pthread_mutex_init(&mutexCmd[i], 0);
-		pthread_mutex_lock(&mutexCmd[i]);
-	}
+	dataSocClients dtCli;
 
 	/* --- BOUCLE PRINCIPALE --- */
 	while (1) {
 		sem_wait(&semaphore_nb_clients);
 		
 		/* Lock du mutex pour numClient */
-		pthread_mutex_lock(&mutex_numClient);
-		int numClient = -1;
+		pthread_mutex_lock(&mutex_dataSocClient);
 
-		/* Recherche un slot disponible dans le tableau pour le prochain client */
-		i = 0;
-		while (i < NB_MAX_CLIENTS && numClient == -1) {
-			if (socketClients[i] == -1) {
-				numClient = i;
-			}
-			i++;
-		}
+		
 
 		printf ("Attente de connexion d'un client\n");
-		int resConnexion = attenteConnexion(&socketClients[numClient], &adClient[numClient]);
+		int resConnexion = attenteConnexion(&dtCli.socket, &dtCli.donneesClient);
+
 
 		if (resConnexion == 0) {
 			/* Reccupere l'IP du client et l'affiche*/
-			char ipclient[50];
-			inet_ntop(AF_INET, &(adClient[numClient].sin_addr), ipclient, INET_ADDRSTRLEN);	
+			// char ipclient[50];
+			// inet_ntop(AF_INET, &(adClient[numClient].sin_addr), ipclient, INET_ADDRSTRLEN);	
 
-			printf ("Client de numero %d et d'ip %s connecte !\n\n", numClient, ipclient);
+			// printf ("Client de numero %d et d'ip %s connecte !\n\n", numClient, ipclient);
+
+			/* Cree un thread dedie pour ce client */
+			pthread_t thread;
+			pthread_create(&thread, 0, (void*) conversation, &dtCli);
 		} else {
 			perror ("Erreur lors de la connexion au client\n");
-			deconnecterSocket(numClient);
+			// deconnecterSocket(numClient);
 		}
 
-		/* Cree un thread dedie pour ce client */
-		pthread_create(&threadClients[numClient], 0, (void*) conversation, &numClient);
 
 	}
 
