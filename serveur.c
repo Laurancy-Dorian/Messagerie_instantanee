@@ -60,10 +60,16 @@ typedef struct salon {
 
 salon tabSalons[NB_MAX_SALONS];
 
-const salon EmptySalon = {
-	-1, -1, NULL, PTHREAD_MUTEX_INITIALIZER, NULL
-};
-
+// TODO
+// const dataSocClients EmptyDataSocClient = {
+// 	-1, {}
+// };
+// const salon EmptySalon = {
+// 	-1, -1, NULL, PTHREAD_MUTEX_INITIALIZER, NULL
+// };
+// const client EmptyClient = {
+// 	-1, -1, EmptyDataSocClient, NULL, PTHREAD_MUTEX_INITIALIZER, 
+// };
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
 * 	"fermer" puisse y acceder (car elle peut etre declenchee par un CTRL + C) 
@@ -571,13 +577,37 @@ int envoi_reception (int numSocEnvoyeur) {
 *	Effectue la transition des message entre ce client et les autres clients
 *	Transmet ensuite les messages de ce client a tous les autres
 *
-*	param : 	int 	numcli 	Le NUMERO du client dans le tableau des sockets (pas le descripteur)
+*	param : 	dataSocClients* 	dsc 	Le pointeur vers la structure qui contient les donnees du client
 *
 */
-void *conversation (int* numcli) {
-	/* init de variable et liberation du mutex sur numClient */
-	int numClient = *numcli;
-	pthread_mutex_unlock(&mutex_numClient);
+void *conversation (dataSocClients *dsc) {
+	/* init de variable et liberation du mutex sur dataSocClient */
+	dataSocClients dtCli = *dsc;
+	pthread_mutex_unlock(&mutex_dataSocClient);
+
+	/* Reccupere l'IP du client et l'affiche*/
+	char ipclient[50];
+	inet_ntop(AF_INET, &(dtCli.donneesClient.sin_addr), ipclient, INET_ADDRSTRLEN);	
+
+	printf ("Client de numero d'ip %s connecte !\n\n", ipclient);
+
+	/* Creation des donnees du client */
+	int id = -1;
+	int salon = 0;
+	char pseudo[TAILLE_PSEUDO];
+	pthread_t thread;
+	char lastCmd[TAILLE_BUFFER];
+	pthread_mutex_t mutex;
+	pthread_mutex_init(&mutex,0);
+	client cl = {id, salon, dtCli, pseudo, thread, lastCmd, mutex};
+
+	// while (i < NB_MAX_CLIENTS && numClient == -1) {
+	// 		if (socketClients[i] == -1) {
+	// 			numClient = i;
+	// 		}
+	// 		i++;
+	// 	}
+
 
 	int res = 0;
 	char str[128];
@@ -697,7 +727,7 @@ int main (int argc, char *argv[]) {
 	pthread_mutex_init(&mutex_dataSocClient,0);
 	sem_init(&semaphore_nb_clients, 0, NB_MAX_CLIENTS);
 
-	dataSocClients dtCli;
+	
 
 	/* --- BOUCLE PRINCIPALE --- */
 	while (1) {
@@ -706,19 +736,13 @@ int main (int argc, char *argv[]) {
 		/* Lock du mutex pour numClient */
 		pthread_mutex_lock(&mutex_dataSocClient);
 
+		dataSocClients dtCli;
 		
-
 		printf ("Attente de connexion d'un client\n");
 		int resConnexion = attenteConnexion(&dtCli.socket, &dtCli.donneesClient);
 
 
 		if (resConnexion == 0) {
-			/* Reccupere l'IP du client et l'affiche*/
-			// char ipclient[50];
-			// inet_ntop(AF_INET, &(adClient[numClient].sin_addr), ipclient, INET_ADDRSTRLEN);	
-
-			// printf ("Client de numero %d et d'ip %s connecte !\n\n", numClient, ipclient);
-
 			/* Cree un thread dedie pour ce client */
 			pthread_t thread;
 			pthread_create(&thread, 0, (void*) conversation, &dtCli);
