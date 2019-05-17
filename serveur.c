@@ -60,16 +60,17 @@ typedef struct salon {
 
 salon tabSalons[NB_MAX_SALONS];
 
-// TODO
-// const dataSocClients EmptyDataSocClient = {
-// 	-1, {}
-// };
-// const salon EmptySalon = {
-// 	-1, -1, NULL, PTHREAD_MUTEX_INITIALIZER, NULL
-// };
-// const client EmptyClient = {
-// 	-1, -1, EmptyDataSocClient, NULL, PTHREAD_MUTEX_INITIALIZER, 
-// };
+
+const dataSocClients EmptyDataSocClient = {
+	-1, {}
+};
+const salon EmptySalon = {
+	-1, -1, NULL, PTHREAD_MUTEX_INITIALIZER, NULL
+};
+const client EmptyClient = {
+	-1, -1, EmptyDataSocClient, NULL, 0, NULL, PTHREAD_MUTEX_INITIALIZER
+};
+
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
 * 	"fermer" puisse y acceder (car elle peut etre declenchee par un CTRL + C) 
@@ -581,6 +582,8 @@ int envoi_reception (int numSocEnvoyeur) {
 *
 */
 void *conversation (dataSocClients *dsc) {
+
+	int salonParDefault = 0;
 	/* init de variable et liberation du mutex sur dataSocClient */
 	dataSocClients dtCli = *dsc;
 	pthread_mutex_unlock(&mutex_dataSocClient);
@@ -589,32 +592,41 @@ void *conversation (dataSocClients *dsc) {
 	char ipclient[50];
 	inet_ntop(AF_INET, &(dtCli.donneesClient.sin_addr), ipclient, INET_ADDRSTRLEN);	
 
-	printf ("Client de numero d'ip %s connecte !\n\n", ipclient);
-
 	/* Creation des donnees du client */
-	int id = -1;
-	int salon = 0;
-	char pseudo[TAILLE_PSEUDO];
+	
+	int salon = salonParDefault; // TODO Changer ce salon par default
 	pthread_t thread;
 	char lastCmd[TAILLE_BUFFER];
 	pthread_mutex_t mutex;
 	pthread_mutex_init(&mutex,0);
-	client cl = {id, salon, dtCli, pseudo, thread, lastCmd, mutex};
 
-	// while (i < NB_MAX_CLIENTS && numClient == -1) {
-	// 		if (socketClients[i] == -1) {
-	// 			numClient = i;
-	// 		}
-	// 		i++;
-	// 	}
-
-
-	int res = 0;
-	char str[128];
 
 	/* Reception du pseudo du client */
-	int resPseudo = reception(socketClients[numClient], str, TAILLE_PSEUDO);
-	strcpy(pseudoClients[numClient], str);
+	char pseudo[TAILLE_PSEUDO];
+	int resPseudo = reception(dsc.socket, pseudo, TAILLE_PSEUDO);
+
+	printf ("Client de pseudo %s d'ip %s connecte !\n\n", pseuipclient);
+
+	/* Selectionne un slot vide dans le tableau des salons */
+	int i = 0;
+	int position_tableau_salon = -1;
+	while (i < tabSalons[salon].maxClients && position_tableau_salon == -1) {
+		if (tabSalons[salon].tabClients[i] == -1) {
+			position_tableau_salon = i;
+		}
+ 		i++;
+ 	}
+
+ 	if (position_tableau_salon != -1) {
+ 		/* cree la structure du client */
+		client cl = {position_tableau_salon, salon, dtCli, pseudo, thread, lastCmd, mutex};
+
+		/* Ajoute le client au salon */
+		tabSalons[salon].nbClients++;
+	}
+	// TODO lancer le chat
+
+	int res = 0;
 
 	if (resPseudo > 3) {
 		envoi(socketClients[numClient], "BEGIN");
