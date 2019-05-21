@@ -1,6 +1,6 @@
 /************************************************
 *												*
-* 	MESSAGERIE INSTANTANEE - SERVEUR - v3		*
+* 	MESSAGERIE INSTANTANEE - SERVEUR - v4		*
 *												*
 *	AUTEURS : CABARET Emma - LAURANCY Dorian	*
 *												*
@@ -45,9 +45,6 @@ typedef struct client {
 	int salon; 	// id du salon
 	dataSocClients dtCli;
 	char* pseudo; // Le pseudo du client (length > 2)
-	pthread_t thread;
-	char* lastCmd;
-	pthread_mutex_t mutexCmd;
 } client;
 
 typedef struct salon {
@@ -61,15 +58,9 @@ typedef struct salon {
 salon tabSalons[NB_MAX_SALONS];
 
 
-const dataSocClients EmptyDataSocClient = {
-	-1, {}
-};
-const salon EmptySalon = {
-	-1, -1, NULL, PTHREAD_MUTEX_INITIALIZER, NULL
-};
-const client EmptyClient = {
-	-1, -1, EmptyDataSocClient, NULL, 0, NULL, PTHREAD_MUTEX_INITIALIZER
-};
+salon EmptySalon;
+client EmptyClient;
+
 
 /* 
 *	Declaration des Sockets. Ils doivent etre globaux pour que la fonction 
@@ -90,42 +81,7 @@ pthread_mutex_t mutex_dataSocClient;
 /* Ce semaphore permet de ne plus accepter de nouveaux clients lorsqu'il y a autant de clients que NB_MAX_CLIENTS */
 sem_t semaphore_nb_clients; 
 
-/* == Commandes == */
-/* Structure contenant les commandes */
-typedef struct st_cmd {
-	char* cmd;		// La chaine de caracteres representant la commande
-	void *fonction;	// Le pointeur vers la fonction associee a la commande
-} st_cmd;
 
-/* Commandes lors d'echanges d'informations entre le serveur et le client. L'utilisateur n'est pas cense les utiliser */
-char* commandes_systeme[] = {"/FILESEND", "/FILERECV", "/FILEPORT", "/FILE"};
-
-
-/* == Declaration des fonctions == */
-void help(int numSocket);
-void fin(int numSocket);
-void file(int numSocket);
-void file_traitements(int* numSoc);
-void friends(int numSocket);
-int initialisation (int port);
-int attenteConnexion(int* socClient, struct sockaddr_in *donneesClient);
-int envoi (int socClient, char* msg);
-int reception (int socClient, char* msg, int taille);
-int broadcast(int numClient, char* msg);
-void deconnecterSocket(int numSocket);
-void fermer();
-int envoi_reception (int numSocEnvoyeur);
-void *conversation (int* numcli);
-void ipServeur(char* ip);
-
-/* Liste des commandes */
-st_cmd commandes[NB_COMMANDES] = {
-	{"/help", &help},
-	{"/fin", &fin},
-	{"/file", &file},
-	{"/friends", &friends},
-	{"/", &help}
-};
 
 
 /* 
@@ -146,210 +102,6 @@ void fin (int numSocket) {
 	pthread_exit(0);
 }
 
-/* 
-*	Envoie la liste des commandes disponibles au client
-*	param : 	int 	numSocket	Le numero dans le tableau des sockets du client qui effectue cette commande
-*/ 
-void help (int numSocket) {
-	char str[TAILLE_BUFFER] = "\n[MSG SERVEUR] ";
-	strcat(str, "Voici la liste des commandes : \n");
-
-	int i;
-	for (i = 0; i < NB_COMMANDES-1; i++) {
-		strcat(str, commandes[i].cmd);
-		strcat(str, "\n");
-	}
-	strcat (str, "[END MSG SERVEUR]\n");
-
-	envoi(socketClients[numSocket], str);
-	lastCmd[numSocket][0] = '\0';
-}
-
-
-/* 
-*	Envoie la liste des pseudos des correspondants au client
-*	param : 	int 	numSocket	Le numero dans le tableau des sockets du client qui effectue cette commande
-*/ 
-void friends (int numSocket) {
-	char str[TAILLE_BUFFER] = "\n[MSG SERVEUR] Voici la liste des amis :\n";
-
-	int i;
-	for (i = 0; i < NB_MAX_CLIENTS; i++) {
-		if (socketClients[i] != -1 && i != numSocket) {
-			strcat(str, pseudoClients[i]);
-			strcat(str, "\n");
-		}
-	}
-	strcat (str, "[END MSG SERVEUR]\n");
-
-	envoi(socketClients[numSocket], str);
-	lastCmd[numSocket][0] = '\0';
-
-}
-
-
-/* 
-*	Execute les traitements de la commande /file
-*	Permet de communiquer aux clients leurs ports et adresse ip
-*	param : int*	numSocket 	Le numero dans le tableau des sockets du client emeteur
-*	
-*	prereq : Cette fonction doit etre lancee par la fonction file
-*			 La case lastCmd[numSoc] doit etre remplie par la commande /file... du client
-*/
-void file_traitements(int* numSoc) {
-	int numSocket = numSoc[0];
-	int numSocket2 = numSoc[1];
-	/* Attend la reponse du client */
-	int ok = FALSE;
-	while (ok == FALSE) {
-		pthread_mutex_lock(&mutexCmd[numSocket]);
-		if (strncmp(lastCmd[numSocket], "/FILEPORT", 9) != 0) {
-			pthread_mutex_unlock(&mutexCmd[numSocket]);
-		} else {
-			ok = TRUE;
-		}
-	}
-
-	/* On reccupere le port */
-	char cmd[TAILLE_BUFFER];
-	strcpy(cmd, lastCmd[numSocket]);
-	char* port = &cmd[10];
-
-	/* Envoi du message */
-	char str[TAILLE_BUFFER];
-	strcpy (str, "/FILE ");
-	strcat (str, port);
-	envoi(socketClients[numSocket2], str);
-
-	/* Le client correspondant a toutes les informations qu'il faut pour echanger un fichier, ce thread se termine */
-	lastCmd[numSocket][0] = '\0';
-	pthread_exit(0);
-}
-
-/* 
-*	Commande File : cree un thread par client pour le traitement de cette commande (voir file_traitement)
-*	Cette fonction est une commande, il faut donc qu'elle ait ete appelee par la fonction commande
-* 	param :		int 	numSocket	Le numero dans le tableau des sockets du client quilance cette commande
-*	prereq : 	Le tableau lastCmd[numSocket] a ete rempli par la commande de l'utilisateur
-*/
-void file (int numSocket) {
-	pthread_mutex_lock(&mutexCmd[numSocket]);
-
-	char cmd[TAILLE_BUFFER];
-	strcpy(cmd, lastCmd[numSocket]);
-	
-
-	/* Reccupere le nom du client */
-	char* nomClient = strtok(cmd, " ");
-	nomClient = strtok(NULL, " ");
-
-
-	/* Verifie si le pseudo correspond a un de ceux dans la liste */
-	int i = 0;
-	int found = FALSE;
-	if (nomClient != NULL) {
-		while (found == FALSE && i < NB_MAX_CLIENTS) {
-			if (socketClients[i] != -1 && i != numSocket && strcmp(nomClient, pseudoClients[i]) == 0) {
-				found = TRUE;
-			} else {
-				i++;
-			}
-			
-		}
-	}
-
-	/* Si le pseudo ne correspond pas : Affiche la liste des amis au client */
-	if (found == FALSE) {
-		envoi(socketClients[numSocket], "[MSG SERVEUR] Ce pseudo ne correspond a aucun client connecte [END MSG SERVEUR]\n");
-		sleep(0.5);
-		friends(numSocket);
-		lastCmd[numSocket][0] = '\0';
-	} else {
-		int numReceveur = i; 
-		printf("Mise en relation de %s et %s pour un transfert de fichiers\n",pseudoClients[numSocket], pseudoClients[numReceveur]);
-
-		/* Initie le lancement du transfert de fichier */
-
-		/* Reccuperation des IP */
-		char ipEnvoyeur[50];
-		inet_ntop (AF_INET, &(adClient[numSocket].sin_addr), ipEnvoyeur, INET_ADDRSTRLEN);	
-
-		char ipReceveur[50];
-		inet_ntop (AF_INET, &(adClient[numReceveur].sin_addr), ipReceveur, INET_ADDRSTRLEN);	
-
-		/* Envoie /FILESEND [IP] au client envoyeur */
-		char str[TAILLE_BUFFER] = "/FILESEND ";
-		strcat(str, ipReceveur);
-		envoi(socketClients[numSocket], str);
-
-		/* Envoie /FILERECV [IP] au client recepteur */
-		strcpy(str, "/FILERECV ");
-		strcat(str, ipEnvoyeur);
-		envoi(socketClients[numReceveur], str);
-
-
-		/* Cree un thread par client pour envoyer les informations sur les ports au clients */
-		pthread_t t1; 
-		int tab[] = {numSocket, numReceveur};
-		pthread_create(&t1, 0, (void*) &file_traitements, &tab);
-
-		pthread_t t2; 
-		int tab2[] = {numReceveur, numSocket};
-		pthread_create(&t2, 0, (void*) &file_traitements, &tab2);
-	}
-
-}
-
-
-/*
-*	Effectue la commande pour ce client
-*	param : char* 	str 	 			La commande a effectuer
-*			int 	numSocEnvoyeur		Le NUMERO du client envoyeur dans le tableau des sockets (pas le descripteur)
-*	return : 
-*			 -1 si erreur
-*			 0 si ok
-*/
-int commande(char* str, int numSocEnvoyeur) {	
-	/* Enregistre la commande dans le tableau des commandes */
-	strcpy(lastCmd[numSocEnvoyeur], str);
-	pthread_mutex_unlock(&mutexCmd[numSocEnvoyeur]);
-
-	char commande[strlen(str)];
-	strcpy(commande, str);
-	char* cmd = strtok(commande, " ");
-
-	/* Execute la commande si elle existe */
-	int i = 0;
-	int commande_executee = FALSE;
-	while (i < sizeof(commandes)/sizeof(commandes[0]) && commande_executee == FALSE) {
-		
-		if (strlen(cmd) == strlen(commandes[i].cmd) && strncmp(commandes[i].cmd, cmd, strlen(commandes[i].cmd)) == 0) {
-			void (*f)(int) = commandes[i].fonction;
-			(*f)(numSocEnvoyeur);
-			commande_executee = TRUE;
-		}
-		i++;
-	}
-
-	/* Verifie si cette "commande" n'est pas une commande systeme */
-	i = 0;
-	int est_cmd_sys = FALSE;
-	if (commande_executee == FALSE) {
-		while (i < sizeof(commandes_systeme)/sizeof(commandes_systeme[0]) && est_cmd_sys == FALSE) {
-			if (strlen(cmd) == strlen(commandes_systeme[i]) && strncmp(commandes_systeme[i], cmd, strlen(commandes_systeme[i])) == 0) {
-				est_cmd_sys = TRUE;
-			}
-			i++;
-		}
-	}
-	
-	/* Si cette commande n'est pas referencee dans les commandes disponibles, alors affiche la liste des commandes a l'utilisateur */
-	if (commande_executee == FALSE && est_cmd_sys == FALSE) {
-		help(numSocEnvoyeur);
-	}
-	
-	return 0;
-}
 
 /*
 *	Initialise le serveur : prepare le socket, bind et listen
@@ -459,36 +211,20 @@ int broadcast(int numClient, char* msg) {
 * 	
 *	param : 	int 	numSocket	La position du socket dans le tableau
 */
-void deconnecterSocket(int numSocket) {
-	int debut;
-	int fin;
+void deconnecterSocket(client cl) {		// TODO Finir la fonction
+	
+	/* Envoie "FIN" au client pour qu'il se deconnecte de son compte */
+	envoi(dtCli.socket, "/fin");
+	shutdown (dtCli.socket, 2);
+	socketClients[i] = -1;
+	pseudoClients[i][0] = '\0';
+	pthread_mutex_unlock(&mutexCmd[numSocket]);
+	lastCmd[i][0] = '\0';
 
-	if (numSocket == -1) {
-		debut = 0;
-		fin = NB_MAX_CLIENTS;
-	} else {
-		debut = numSocket;
-		fin = numSocket+1;
-	}
+	/* Libere un jeton dans le semaphore */
+	sem_post(&semaphore_nb_clients);
 
-	int i;
-	for (i = debut; i < fin; i++) {
-		if (socketClients[i] != -1) {
-			printf ("Client n°%d %s deconnecte\n\n", i, pseudoClients[i]);
 
-			/* Envoie "FIN" au client pour qu'il se deconnecte de son conte */
-			envoi(socketClients[i], "/fin");
-			shutdown (socketClients[i], 2);
-			socketClients[i] = -1;
-			pseudoClients[i][0] = '\0';
-			pthread_mutex_unlock(&mutexCmd[numSocket]);
-			lastCmd[i][0] = '\0';
-
-			/* Libere un jeton dans le semaphore */
-			sem_post(&semaphore_nb_clients);
-
-		}
-	}
 
 }
 
@@ -529,17 +265,17 @@ void fermer() {
 /*
 *	Transmet un message du client a tous les autres clients
 *	Si ce client envoie fin ou se deconnecte, la fonction retourne directement -1
-*	param : int 	numSocEnvoyeur		Le NUMERO du client envoyeur dans le tableau des sockets (pas le descripteur)
+*	param : client 	cl		La structure du client
 *	return : 
 *			 -1 si erreur lors de la reception du message du client
 			 1 Si le client se deconnecte ou envoie "FIN"
 *			 0 sinon
 */
-int envoi_reception (int numSocEnvoyeur) {
+int envoi_reception (client cl) {
 	/* Initialisation du buffer */
 	char str[TAILLE_BUFFER];
 	int res;
-	int socEnvoyeur = socketClients[numSocEnvoyeur];
+	int socEnvoyeur = cl.dtCli.socket;
 
 	
 	/* ---- RECEPTION ---- */
@@ -553,21 +289,18 @@ int envoi_reception (int numSocEnvoyeur) {
 		strcpy(str, "/fin");
 	}
 
-	if (strncmp ("/", str, 1) == 0) {
-		commande(str, numSocEnvoyeur);
-	} else {
-		/* Ajout du pseudo dans le message avant de l'envoyer aux autres clients "[pseudo] message" */
-		char msgClient[strlen(pseudoClients[numSocEnvoyeur]) + strlen(str) + 4]; /* (+4) pour les 4 caracteres en plus ([] \0 ' ')*/
-		strcpy(msgClient, "[");
-		strcat(msgClient, pseudoClients[numSocEnvoyeur]);
-		strcat(msgClient, "] ");
-		strcat(msgClient, str);
+	/* Ajout du pseudo dans le message avant de l'envoyer aux autres clients "[pseudo] message" */
+	char msgClient[strlen(cl.pseudo) + strlen(str) + 4]; /* (+4) pour les 4 caracteres en plus ([] \0 ' ')*/
+	strcpy(msgClient, "[");
+	strcat(msgClient, cl.pseudo);
+	strcat(msgClient, "] ");
+	strcat(msgClient, str);
 
 
-		/* ---- ENVOI ---- */
-		/* Envoie le message aux autres clients */
-		broadcast(numSocEnvoyeur, msgClient);
-	}
+	/* ---- ENVOI ---- */
+	/* Envoie le message aux autres clients */
+	broadcast(cl, msgClient);
+	
 
 	return 0;
 
@@ -588,6 +321,10 @@ void *conversation (dataSocClients *dsc) {
 	dataSocClients dtCli = *dsc;
 	pthread_mutex_unlock(&mutex_dataSocClient);
 
+	client cl;
+
+	cl.dtCli = dtCli;
+
 	/* Reccupere l'IP du client et l'affiche*/
 	char ipclient[50];
 	inet_ntop(AF_INET, &(dtCli.donneesClient.sin_addr), ipclient, INET_ADDRSTRLEN);	
@@ -595,59 +332,61 @@ void *conversation (dataSocClients *dsc) {
 	/* Creation des donnees du client */
 	
 	int salon = salonParDefault; // TODO Changer ce salon par default
-	pthread_t thread;
-	char lastCmd[TAILLE_BUFFER];
-	pthread_mutex_t mutex;
-	pthread_mutex_init(&mutex,0);
-
+	cl.salon = salon;
 
 	/* Reception du pseudo du client */
 	char pseudo[TAILLE_PSEUDO];
-	int resPseudo = reception(dsc.socket, pseudo, TAILLE_PSEUDO);
-
-	printf ("Client de pseudo %s d'ip %s connecte !\n\n", pseuipclient);
-
-	/* Selectionne un slot vide dans le tableau des salons */
-	int i = 0;
-	int position_tableau_salon = -1;
-	while (i < tabSalons[salon].maxClients && position_tableau_salon == -1) {
-		if (tabSalons[salon].tabClients[i] == -1) {
-			position_tableau_salon = i;
-		}
- 		i++;
- 	}
-
- 	if (position_tableau_salon != -1) {
- 		/* cree la structure du client */
-		client cl = {position_tableau_salon, salon, dtCli, pseudo, thread, lastCmd, mutex};
-
-		/* Ajoute le client au salon */
-		tabSalons[salon].nbClients++;
-	}
-	// TODO lancer le chat
-
-	int res = 0;
+	int resPseudo = reception(dtCli.socket, pseudo, TAILLE_PSEUDO);
 
 	if (resPseudo > 3) {
-		envoi(socketClients[numClient], "BEGIN");
-		/* Envoie un message de connexion a tous les clients */
-		sprintf(str, ">>>> %s s'est connecte", pseudoClients[numClient]);
-		broadcast(numClient, str);
+		printf ("Client de pseudo %s d'ip %s connecte !\n\n", pseudo, ipclient);
 
-		/* Boucle de la conversation */
-		while(res == 0) {
-			res = envoi_reception(numClient);
+		/* Selectionne un slot vide dans le tableau des salons */
+		int i = 0;
+		int position_tableau_salon = -1;
+		while (i < tabSalons[salon].maxClients && position_tableau_salon == -1) {
+			if (tabSalons[salon].tabClients[i].id == -1) {
+				position_tableau_salon = i;
+			}
+	 		i++;
+	 	}
+
+	 	if (position_tableau_salon != -1) {
+	 		/* cree la structure du client */
+	 		cl.id = position_tableau_salon
+
+			/* Ajoute le client au salon */
+			tabSalons[salon].tabClients[position_tableau_salon] = cl;
+			tabSalons[salon].nbClients++;
+
+			int res = 0;
+			char str[TAILLE_BUFFER];
+
+			envoi(cl.dtCli.socket, "BEGIN");
+
+			/* Envoie un message de connexion a tous les clients */
+			sprintf(str, ">>>> %s s'est connecte", cl.pseudo);
+			broadcast(cl, str);
+
+			/* Boucle de la conversation */
+			while(res == 0) {
+				res = envoi_reception(cl);
+			}
+
+			/* Envoie le message de deconnexion a tous les clients */
+			sprintf(str, "<<<< %s s'est deconnecte", cl.pseudo);
+			broadcast(cl, str);		
 		}
-
-		/* Envoie le message de deconnexion a tous les clients */
-		sprintf(str, "<<<< %s s'est deconnecte", pseudoClients[numClient]);
-		broadcast(numClient, str);
 	}
 
 	/* Deconnecte et quitte le thread */
-	deconnecterSocket (numClient);
+	deconnecterSocket (cl);
 	pthread_exit(0);
+
 }
+
+
+
 
 
 
@@ -720,6 +459,9 @@ int main (int argc, char *argv[]) {
 		ipServeur(ipServ);
 		printf("IP : %s\nPort : %d\n", ipServ, port);
 	}
+
+	EmptySalon.maxClients = -1;
+	EmptyClient.id = -1;
 
 
 	/* Initialise le tableau des sockets à -1 : Lorsqu'une case est egale a -1, on peut l'ulitilser pour l'attribuer au prochain client */
