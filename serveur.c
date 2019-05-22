@@ -165,7 +165,13 @@ int reception (int socClient, char* msg, int taille) {
 	return (int) recv (socClient, msg, taille, 0);
 }
 
-
+/*
+*	Envoie la liste des salons au client et attend qu'il en choissise un valide
+*	param :		int Socket 		Le socket du client qui se connecte.
+*
+*	return : 	numSalon 		L'indice du salon dans le tableau de Salon
+*
+*/
 
 int getSalon (int socket) {
 	int numSalon = -1;
@@ -209,7 +215,7 @@ int getSalon (int socket) {
 
 /* 
 *	Envoie le message a tout les clients
-*	param : 	int 	numClient 	Le NUMERO du client qui envoie le message (et non le descripteur de socket)
+*	param : 	cl		client 		Le client qui envoie le message
 *				char*	msg 		La chaine a envoyer
 
 *	return : 	-1 si echec
@@ -231,10 +237,9 @@ int broadcast(client cl, char* msg) {
 }
 
 /*
-*	Deconnecte le socket du client dont le numero du tableau des sockets et passé en parametre
-*	Si le parametre est -1, alors on deconnecte tous les sockets
+*	Deconnecte le socket du client passé en parametre
 * 	
-*	param : 	int 	numSocket	La position du socket dans le tableau
+*	param : 	cl 	client	Le client qui se déconnecte.
 */
 void deconnecterSocket(client cl) {		
 	
