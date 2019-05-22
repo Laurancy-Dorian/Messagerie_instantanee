@@ -620,6 +620,7 @@ int main (int argc, char *argv[]) {
 	printf("Veuillez patienter, vous etes en file d'attente...\n");
 	char str[128];
 	int resDebut = reception(str, 128);
+	printf("%s\n", str);
 	if (resDebut == 0 && strlen(str) == 5 && strncmp("BEGIN", str, 5) == 0) {
 
 		/* Init du mutex sur fin */

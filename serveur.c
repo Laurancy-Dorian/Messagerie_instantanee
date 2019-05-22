@@ -84,25 +84,6 @@ sem_t semaphore_nb_clients;
 
 
 
-/* 
-*	Deconnecte ce client du salon
-*	param : 	int 	numSocket	Le numero dans le tableau des sockets du client qui effectue cette commande
-*/ 
-void fin (int numSocket) {
-	char str[TAILLE_BUFFER];
-
-	/* Envoie le message de deconnexion a tous les clients */
-	sprintf(str, "<<<< %s s'est deconnecte", pseudoClients[numSocket]);
-	broadcast(numSocket, str);
-
-	/* Deconnecte et quitte le thread */
-	deconnecterSocket (numSocket);
-
-	lastCmd[numSocket][0] = '\0';
-	pthread_exit(0);
-}
-
-
 /*
 *	Initialise le serveur : prepare le socket, bind et listen
 *	param : int port 	Le port sur lequel le socket doit ecouter
@@ -184,6 +165,48 @@ int reception (int socClient, char* msg, int taille) {
 	return (int) recv (socClient, msg, taille, 0);
 }
 
+
+
+int getSalon (int socket) {
+	int numSalon = -1;
+	char reponse[TAILLE_BUFFER];
+	int res = 0;
+	int i = 0;
+	sleep(0.1);
+
+	while (numSalon <= 0 || numSalon > NB_MAX_SALONS) {
+		char str[TAILLE_BUFFER] = "\n[MSG SERVEUR] ";
+		strcat(str, "Voici la liste des salons : \n");
+
+		char str2[100];
+		
+		for (i = 0; i < NB_MAX_SALONS; i++) {
+			sprintf(str2, " (%d/%d)\n", tabSalons[i].nbClients, tabSalons[i].maxClients);
+			strcat(str, tabSalons[i].nomSalon);
+			strcat(str, str2);
+		}
+		strcat (str, "[END MSG SERVEUR]\n");
+
+	
+		envoi(socket, str);
+		res = reception(socket, reponse, TAILLE_BUFFER);
+		if (res == 0) {
+			return -1;
+		} else {
+			numSalon = atoi(reponse);
+			if (numSalon > 0 && numSalon <= NB_MAX_SALONS) {
+				if (tabSalons[numSalon-1].nbClients > tabSalons[numSalon-1].maxClients) {
+					numSalon = -1;
+					printf("RESET\n");
+				}
+			}
+		}
+	}
+	
+	return numSalon-1;
+}
+
+
 /* 
 *	Envoie le message a tout les clients
 *	param : 	int 	numClient 	Le NUMERO du client qui envoie le message (et non le descripteur de socket)
@@ -192,12 +215,14 @@ int reception (int socClient, char* msg, int taille) {
 *	return : 	-1 si echec
 *				1 si reussite
 */
-int broadcast(int numClient, char* msg) {
-	for (int i = 0; i<NB_MAX_CLIENTS; i++) {
+int broadcast(client cl, char* msg) {
+	salon s = tabSalons[cl.salon];
+
+	for (int i = 0; i<s.maxClients; i++) {
 
 		/* Envoie uniquement au clients connectes (socket != -1 sauf au client envoyeur) */
-		if (i != numClient && socketClients[i] != -1) {
-			if (envoi (socketClients[i], msg) == -1) {
+		if (i != cl.id && s.tabClients[i].id != -1) {
+			if (envoi (s.tabClients[i].dtCli.socket, msg) == -1) {
 				return -1;
 			}
 		}
@@ -211,21 +236,22 @@ int broadcast(int numClient, char* msg) {
 * 	
 *	param : 	int 	numSocket	La position du socket dans le tableau
 */
-void deconnecterSocket(client cl) {		// TODO Finir la fonction
+void deconnecterSocket(client cl) {		
 	
 	/* Envoie "FIN" au client pour qu'il se deconnecte de son compte */
-	envoi(dtCli.socket, "/fin");
-	shutdown (dtCli.socket, 2);
-	socketClients[i] = -1;
-	pseudoClients[i][0] = '\0';
-	pthread_mutex_unlock(&mutexCmd[numSocket]);
-	lastCmd[i][0] = '\0';
+	envoi(cl.dtCli.socket, "/fin");
+	shutdown (cl.dtCli.socket, 2);
+
+	pthread_mutex_lock(&tabSalons[cl.salon].mutexSalon);
+
+	tabSalons[cl.salon].tabClients[cl.id].id = -1;
+	tabSalons[cl.salon].nbClients--;
+
+	pthread_mutex_unlock(&tabSalons[cl.salon].mutexSalon);
+	
 
 	/* Libere un jeton dans le semaphore */
 	sem_post(&semaphore_nb_clients);
-
-
-
 }
 
 /*
@@ -233,10 +259,6 @@ void deconnecterSocket(client cl) {		// TODO Finir la fonction
 */
 void fermer() {
 	printf("\n\n* -- FERMETURE DU SERVEUR -- *\n");
-
-	/* Ferme tous les sockets clients */
-	deconnecterSocket(-1);
-	printf("Fermeture des sockets clients\n");
 
 	/* Ferme le socket serveur */
 	int res = close(socketServeur);
@@ -248,11 +270,14 @@ void fermer() {
 
 	/* Ferme les semaphores */
 	sem_destroy(&semaphore_nb_clients);
-	pthread_mutex_destroy(&mutex_numClient);
+	pthread_mutex_destroy(&mutex_dataSocClient);
+
 
 	int i = 0;
-	for (i = 0; i<NB_MAX_CLIENTS; i++) {
-		pthread_mutex_destroy(&mutexCmd[i]);
+	for (i = 0; i<NB_MAX_SALONS; i++) {
+		if (tabSalons[i].maxClients != -1) {
+			pthread_mutex_destroy(&tabSalons[i].mutexSalon);
+		}
 	}
 
 	printf("* -- FIN DU PROGRAMME -- *\n");
@@ -285,17 +310,17 @@ int envoi_reception (client cl) {
 	/* Erreur lors de la reception */
 	if (res < 0) {
 		return -1;
-	} else if (res == 0) {
-		strcpy(str, "/fin");
+	} else if (res == 0 || (strlen(str) == 4 && strncmp ("/fin", str, 4) == 0)) {
+		return 1;
 	}
 
+
 	/* Ajout du pseudo dans le message avant de l'envoyer aux autres clients "[pseudo] message" */
-	char msgClient[strlen(cl.pseudo) + strlen(str) + 4]; /* (+4) pour les 4 caracteres en plus ([] \0 ' ')*/
+	char msgClient[strlen(cl.pseudo) + strlen(str) + 10]; /* (+4) pour les 4 caracteres en plus ([] \0 ' ')*/
 	strcpy(msgClient, "[");
 	strcat(msgClient, cl.pseudo);
 	strcat(msgClient, "] ");
 	strcat(msgClient, str);
-
 
 	/* ---- ENVOI ---- */
 	/* Envoie le message aux autres clients */
@@ -315,8 +340,6 @@ int envoi_reception (client cl) {
 *
 */
 void *conversation (dataSocClients *dsc) {
-
-	int salonParDefault = 0;
 	/* init de variable et liberation du mutex sur dataSocClient */
 	dataSocClients dtCli = *dsc;
 	pthread_mutex_unlock(&mutex_dataSocClient);
@@ -329,53 +352,68 @@ void *conversation (dataSocClients *dsc) {
 	char ipclient[50];
 	inet_ntop(AF_INET, &(dtCli.donneesClient.sin_addr), ipclient, INET_ADDRSTRLEN);	
 
-	/* Creation des donnees du client */
-	
-	int salon = salonParDefault; // TODO Changer ce salon par default
-	cl.salon = salon;
 
 	/* Reception du pseudo du client */
 	char pseudo[TAILLE_PSEUDO];
-	int resPseudo = reception(dtCli.socket, pseudo, TAILLE_PSEUDO);
+	int resPseudo = reception(cl.dtCli.socket, pseudo, TAILLE_PSEUDO);
 
-	if (resPseudo > 3) {
+	if (resPseudo > 3){
 		printf ("Client de pseudo %s d'ip %s connecte !\n\n", pseudo, ipclient);
 
-		/* Selectionne un slot vide dans le tableau des salons */
-		int i = 0;
-		int position_tableau_salon = -1;
-		while (i < tabSalons[salon].maxClients && position_tableau_salon == -1) {
-			if (tabSalons[salon].tabClients[i].id == -1) {
-				position_tableau_salon = i;
+		cl.pseudo = pseudo;
+
+		/* Creation des donnees du client */
+		envoi(cl.dtCli.socket, "BEGIN");
+
+		int salon = getSalon(cl.dtCli.socket);
+		if (salon >= 0) {
+			
+			cl.salon = salon;
+			/* Selectionne un slot vide dans le tableau des salons */
+			int i = 0;
+			int position_tableau_salon = -1;
+			while (i < tabSalons[salon].maxClients && position_tableau_salon == -1) {
+				if (tabSalons[salon].tabClients[i].id == -1) {
+					position_tableau_salon = i;
+				}
+		 		i++;
+		 	}
+		 	if (position_tableau_salon != -1) {
+		 		/* cree la structure du client */
+		 		cl.id = position_tableau_salon;
+
+		 		/* Prends un jeton*/
+
+
+		 		pthread_mutex_lock(&tabSalons[salon].mutexSalon);
+				/* Ajoute le client au salon */
+				tabSalons[salon].tabClients[position_tableau_salon] = cl;
+				tabSalons[salon].nbClients++;
+
+				/* libère le jeton */
+				pthread_mutex_unlock(&tabSalons[salon].mutexSalon);
+
+				int res = 0;
+				char str[TAILLE_BUFFER];
+
+
+				/* Envoie un message de connexion a tous les clients */
+				sprintf(str, ">>>> %s s'est connecte", cl.pseudo);
+				broadcast(cl, str);
+
+
+				sprintf(str, "Bienvenue dans %s", tabSalons[cl.salon].nomSalon);
+				envoi(cl.dtCli.socket, str);
+
+				/* Boucle de la conversation */
+				while(res == 0) {
+					res = envoi_reception(cl);
+				}
+
+				/* Envoie le message de deconnexion a tous les clients */
+				sprintf(str, "<<<< %s s'est deconnecte", cl.pseudo);
+				broadcast(cl, str);		
 			}
-	 		i++;
-	 	}
-
-	 	if (position_tableau_salon != -1) {
-	 		/* cree la structure du client */
-	 		cl.id = position_tableau_salon
-
-			/* Ajoute le client au salon */
-			tabSalons[salon].tabClients[position_tableau_salon] = cl;
-			tabSalons[salon].nbClients++;
-
-			int res = 0;
-			char str[TAILLE_BUFFER];
-
-			envoi(cl.dtCli.socket, "BEGIN");
-
-			/* Envoie un message de connexion a tous les clients */
-			sprintf(str, ">>>> %s s'est connecte", cl.pseudo);
-			broadcast(cl, str);
-
-			/* Boucle de la conversation */
-			while(res == 0) {
-				res = envoi_reception(cl);
-			}
-
-			/* Envoie le message de deconnexion a tous les clients */
-			sprintf(str, "<<<< %s s'est deconnecte", cl.pseudo);
-			broadcast(cl, str);		
 		}
 	}
 
@@ -466,22 +504,34 @@ int main (int argc, char *argv[]) {
 
 	/* Initialise le tableau des sockets à -1 : Lorsqu'une case est egale a -1, on peut l'ulitilser pour l'attribuer au prochain client */
 	int i = 0;
-	for (i = 0; i < NB_MAX_SALONS; i++) {
-		tabSalons[i] = EmptySalon;
+	int j = 0;
+
+	for (i = 0; i<NB_MAX_SALONS; i++) {
+		char* nomSalon = (char*)malloc(30 * sizeof(char)); 
+		sprintf(nomSalon, "Salon n°%d", i+1);
+
+		client* cl = (client*)malloc(NB_MAX_CLIENTS_SALONS_DEFAULT* sizeof(client));
+
+		pthread_mutex_t mutexSalon;
+		pthread_mutex_init(&mutexSalon,0);
+
+		tabSalons[i] = (salon) {0, NB_MAX_CLIENTS_SALONS_DEFAULT, nomSalon, mutexSalon, cl};
+
+		for (j=0; j<NB_MAX_CLIENTS_SALONS_DEFAULT; j++) {
+			tabSalons[i].tabClients[j].id = -1;
+		}
+
 	}
 
-	/* Premier Salon */
-	client cl[NB_MAX_CLIENTS_SALONS_DEFAULT];
-	pthread_mutex_t mutexSalon12;
-	pthread_mutex_init(&mutexSalon12,0);
-	tabSalons[0] = (salon) {0, NB_MAX_CLIENTS_SALONS_DEFAULT, "SALON 12", mutexSalon12, cl};
-	/* TODO : Fonction qui cree les salons en passant (nbClientMax, nomSalon) */
+
+	printf("Salons Initialises\n");
+
 
 	/* Init des mutex et semaphores */
 	pthread_mutex_init(&mutex_dataSocClient,0);
 	sem_init(&semaphore_nb_clients, 0, NB_MAX_CLIENTS);
 
-	
+	printf("Debut\n");
 
 	/* --- BOUCLE PRINCIPALE --- */
 	while (1) {
