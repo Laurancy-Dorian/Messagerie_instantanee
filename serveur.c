@@ -145,7 +145,7 @@ int attenteConnexion(int* socClient, struct sockaddr_in *donneesClient) {
 *	return : 	le nombre d'octets envoyes en cas de reussite, -1 sinon
 */
 int envoi (int socClient, char* msg) {
-	return (int) send(socClient, msg, strlen(msg)+1, MSG_NOSIGNAL);
+	return (int) send(socClient, msg, strlen(msg)+1, 0);
 }
 
 /*
@@ -247,12 +247,16 @@ void deconnecterSocket(client cl) {
 	envoi(cl.dtCli.socket, "/fin");
 	shutdown (cl.dtCli.socket, 2);
 
-	pthread_mutex_lock(&tabSalons[cl.salon].mutexSalon);
 
-	tabSalons[cl.salon].tabClients[cl.id].id = -1;
-	tabSalons[cl.salon].nbClients--;
+	if (cl.id != -1) {
+		pthread_mutex_lock(&tabSalons[cl.salon].mutexSalon);
 
-	pthread_mutex_unlock(&tabSalons[cl.salon].mutexSalon);
+		tabSalons[cl.salon].tabClients[cl.id].id = -1;
+		tabSalons[cl.salon].nbClients--;
+
+		pthread_mutex_unlock(&tabSalons[cl.salon].mutexSalon);
+
+	}
 	
 
 	/* Libere un jeton dans le semaphore */
@@ -350,6 +354,8 @@ void *conversation (dataSocClients *dsc) {
 	pthread_mutex_unlock(&mutex_dataSocClient);
 
 	client cl;
+	cl.id = -1;
+	cl.salon = -1;
 
 	cl.dtCli = dtCli;
 
@@ -524,6 +530,8 @@ int main (int argc, char *argv[]) {
 
 		for (j=0; j<NB_MAX_CLIENTS_SALONS_DEFAULT; j++) {
 			tabSalons[i].tabClients[j].id = -1;
+			tabSalons[i].tabClients[j].salon = -1;
+
 		}
 
 	}
